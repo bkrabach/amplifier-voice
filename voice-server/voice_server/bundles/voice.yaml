@@ -1,0 +1,101 @@
+# Voice Bundle Configuration
+# This bundle configures Amplifier for voice assistant interactions
+#
+# Key features:
+# - Auto-approval for tool execution (voice-friendly)
+# - Streaming output for real-time feedback
+# - Tools optimized for voice interactions
+
+bundle:
+  name: voice-assistant
+  version: 1.0.0
+  description: Voice assistant powered by OpenAI Realtime and Amplifier
+
+# Include foundation for core functionality
+includes:
+  - bundle: git+https://github.com/microsoft/amplifier-foundation@main
+
+# Session configuration
+session:
+  orchestrator: loop-streaming
+  context: context-simple
+
+# Tools available to the voice assistant
+tools:
+  # File system operations
+  - module: tool-filesystem
+    config:
+      # Paths will be configured at runtime
+      allowed_paths: []
+
+  # Command execution
+  - module: tool-bash
+    config:
+      # Working directory configured at runtime
+      cwd: null
+      # Timeout for command execution (seconds)
+      timeout: 60
+
+  # Web operations
+  - module: tool-web
+    config:
+      # User agent for web requests
+      user_agent: "VoiceAssistant/1.0"
+
+# Behaviors for voice interaction
+behaviors:
+  # Auto-approve tools for voice (no visual confirmation)
+  - name: voice-auto-approve
+    hooks:
+      - module: hooks-approval
+        config:
+          auto_approve: true
+          dangerous_tools_policy: "allow_with_warning"
+
+  # Streaming UI for real-time feedback
+  - name: voice-streaming
+    hooks:
+      - module: hooks-streaming-ui
+
+  # Logging for debugging
+  - name: voice-logging
+    hooks:
+      - module: hooks-logging
+        config:
+          level: INFO
+
+# Voice-specific context
+context:
+  instructions: |
+    You are a helpful voice assistant. Keep responses concise and conversational.
+
+    When using tools:
+    - Announce what you're doing briefly before executing
+    - Summarize results rather than reading raw output
+    - Handle errors gracefully with simple explanations
+
+    Voice interaction tips:
+    - Use short sentences
+    - Avoid technical jargon when possible
+    - Spell out usernames and paths when needed
+    - Confirm important actions before executing
+
+# Agent configurations for specialized tasks
+agents:
+  - name: file-helper
+    description: Helps with file operations
+    instructions: |
+      Assist with reading, writing, and managing files.
+      Always confirm file paths before modifying.
+
+  - name: code-helper
+    description: Helps with code tasks
+    instructions: |
+      Assist with code-related tasks.
+      Explain what changes you're making in simple terms.
+
+  - name: web-helper
+    description: Helps with web searches and fetching
+    instructions: |
+      Assist with web searches and fetching information.
+      Summarize web content for voice output.

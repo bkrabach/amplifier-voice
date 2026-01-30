@@ -1,0 +1,29 @@
+[project]
+name = "voice-server"
+version = "0.2.0"
+description = "Real-time voice assistant powered by OpenAI Realtime and Microsoft Amplifier"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115.8",
+    "httpx>=0.28.1",
+    "python-dotenv>=1.0.1",
+    "python-multipart>=0.0.20",
+    "uvicorn>=0.34.0",
+    # Amplifier ecosystem (foundation transitively includes core)
+    # Module dependencies are installed automatically by ModuleActivator
+    "amplifier-foundation @ git+https://github.com/microsoft/amplifier-foundation@main",
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+    "pyyaml>=6.0.3",
+]
+
+[project.scripts]
+voice-server = "voice_server.start:main"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
