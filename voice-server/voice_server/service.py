@@ -21,9 +21,6 @@ from .amplifier_bridge import (
     cleanup_amplifier_bridge,
 )
 from .realtime import create_realtime_session, exchange_realtime_sdp
-from .flight_service import (
-    get_flight_service,
-)
 from .transcript import TranscriptEntry, TranscriptRepository
 
 logger = logging.getLogger(__name__)
@@ -266,7 +263,7 @@ def service_init(app: FastAPI, register_lifespan_handler: Callable):
 
         # Get resumption context (conversation history)
         context = _transcript_repo.get_resumption_context(session_id)
-        
+
         # Get full transcript for UI display
         transcript = _transcript_repo.get_transcript(session_id)
 
@@ -286,45 +283,6 @@ def service_init(app: FastAPI, register_lifespan_handler: Callable):
             "realtime": realtime_session,
         }
 
-    # ============ Flight Tracking Endpoints ============
-
-    @app.get("/api/flights")
-    async def get_flights(
-        lamin: Optional[float] = None,
-        lamax: Optional[float] = None,
-        lomin: Optional[float] = None,
-        lomax: Optional[float] = None,
-        limit: int = 100,
-    ) -> Dict[str, Any]:
-        """
-        Get real-time flight data from OpenSky Network.
-
-        Query parameters:
-            lamin: Minimum latitude (south boundary)
-            lamax: Maximum latitude (north boundary)
-            lomin: Minimum longitude (west boundary)
-            lomax: Maximum longitude (east boundary)
-            limit: Maximum number of flights to return (default: 100)
-
-        Returns:
-            FlightData with list of flights and metadata
-        """
-        try:
-            flight_service = await get_flight_service()
-            data = await flight_service.get_flights(
-                lamin=lamin,
-                lamax=lamax,
-                lomin=lomin,
-                lomax=lomax,
-                limit=limit,
-            )
-            return data.to_dict()
-        except Exception as e:
-            logger.error(f"Failed to fetch flights: {e}")
-            raise HTTPException(
-                status_code=503, detail=f"Flight service error: {str(e)}"
-            )
-
     @asynccontextmanager
     async def service_lifespan():
         """Service lifecycle manager - initializes and cleans up Amplifier."""
@@ -334,7 +292,9 @@ def service_init(app: FastAPI, register_lifespan_handler: Callable):
             # Initialize transcript repository
             logger.info("Initializing transcript repository...")
             _transcript_repo = TranscriptRepository()
-            logger.info(f"Transcript repository ready at {_transcript_repo._storage_dir}")
+            logger.info(
+                f"Transcript repository ready at {_transcript_repo._storage_dir}"
+            )
 
             # Initialize Amplifier bridge (programmatic foundation approach)
             logger.info("Initializing Amplifier bridge...")
