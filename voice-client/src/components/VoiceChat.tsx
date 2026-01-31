@@ -8,6 +8,7 @@ import { useVoiceChat } from '../hooks/useVoiceChat';
 import { ControlsPanel } from './ControlsPanel';
 import { TranscriptDisplay } from './TranscriptDisplay';
 import { SessionPicker } from './SessionPicker';
+import { ConnectionExperimentPanel } from './ConnectionExperimentPanel';
 
 const useStyles = makeStyles({
     wrapper: {
@@ -101,7 +102,18 @@ export const VoiceChat: React.FC = () => {
         sessionId,
         startVoiceChat, 
         resumeVoiceChat,
-        disconnectVoiceChat 
+        disconnectVoiceChat,
+        // Health monitoring
+        healthStatus,
+        sessionDuration,
+        idleTime,
+        timeSinceLastEvent,
+        lastDisconnectReason,
+        reconnectCount,
+        isMonitoring,
+        eventLog,
+        reconnectionConfig,
+        setReconnectionConfig,
     } = useVoiceChat();
 
     const handleSessionSelect = async (selectedSessionId: string, isResume: boolean) => {
@@ -164,6 +176,22 @@ export const VoiceChat: React.FC = () => {
                         onStart={startVoiceChat}
                         onDisconnect={disconnectVoiceChat}
                     />
+                    
+                    {/* Connection Health Experiment Panel */}
+                    <div style={{ marginTop: tokens.spacingVerticalM }}>
+                        <ConnectionExperimentPanel
+                            healthStatus={healthStatus}
+                            sessionDuration={sessionDuration}
+                            idleTime={idleTime}
+                            timeSinceLastEvent={timeSinceLastEvent}
+                            lastDisconnectReason={lastDisconnectReason}
+                            reconnectCount={reconnectCount}
+                            isMonitoring={isMonitoring}
+                            eventLog={eventLog}
+                            reconnectionConfig={reconnectionConfig}
+                            onConfigChange={setReconnectionConfig}
+                        />
+                    </div>
                 </div>
             </div>
             <audio ref={audioRef} autoPlay className={styles.audio} />

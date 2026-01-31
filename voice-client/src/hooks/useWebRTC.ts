@@ -21,6 +21,14 @@ interface WebRTCState {
     dataChannelState: string; // Track data channel state
 }
 
+// Callbacks for health monitoring integration
+export interface WebRTCHealthCallbacks {
+    onConnectionStateChange?: (state: string) => void;
+    onDataChannelStateChange?: (state: 'open' | 'closed') => void;
+    onEvent?: (eventType: string) => void;
+    onDisconnect?: (reason: 'connection_failed' | 'data_channel_closed' | 'ice_failed' | 'user_initiated') => void;
+}
+
 export const useWebRTC = () => {
     const [state, setState] = useState<WebRTCState>({
         connected: false,
@@ -35,10 +43,18 @@ export const useWebRTC = () => {
     const streamRef = useRef<MediaStream | null>(null);
     const dataChannelRef = useRef<RTCDataChannel | null>(null);
 
+    // Store health callbacks ref so they can be called throughout the connection lifecycle
+    const healthCallbacksRef = useRef<WebRTCHealthCallbacks>({});
+
     const connect = useCallback(async (
         onMessage: (data: string, dataChannel: RTCDataChannel) => void,
-        existingToken?: string  // Optional token for session resumption
+        existingToken?: string,  // Optional token for session resumption
+        healthCallbacks?: WebRTCHealthCallbacks  // Optional health monitoring callbacks
     ) => {
+        // Store callbacks for use in event handlers
+        if (healthCallbacks) {
+            healthCallbacksRef.current = healthCallbacks;
+        }
         setState(s => ({ ...s, connecting: true, error: null }));
 
         try {
@@ -72,6 +88,7 @@ export const useWebRTC = () => {
             dataChannel.onopen = () => {
                 console.log('[WebRTC] Data channel opened');
                 setState(s => ({ ...s, dataChannelState: 'open' }));
+                healthCallbacksRef.current.onDataChannelStateChange?.('open');
                 
                 // Configure session for voice (GA API)
                 // Structure per OpenAI docs - nested under session.audio.input
@@ -108,6 +125,13 @@ export const useWebRTC = () => {
             };
 
             dataChannel.onmessage = (e) => {
+                // Track event for health monitoring
+                try {
+                    const parsed = JSON.parse(e.data);
+                    healthCallbacksRef.current.onEvent?.(parsed.type || 'unknown');
+                } catch {
+                    healthCallbacksRef.current.onEvent?.('raw_data');
+                }
                 onMessage(e.data, dataChannel);
             };
 
@@ -124,6 +148,8 @@ export const useWebRTC = () => {
                     connected: false,
                     error: 'Data channel closed - session may have timed out'
                 }));
+                healthCallbacksRef.current.onDataChannelStateChange?.('closed');
+                healthCallbacksRef.current.onDisconnect?.('data_channel_closed');
             };
 
             // Handle incoming data channels from server
@@ -140,6 +166,7 @@ export const useWebRTC = () => {
             pc.onconnectionstatechange = () => {
                 console.log('[WebRTC] Connection state:', pc.connectionState);
                 setState(s => ({ ...s, connectionState: pc.connectionState }));
+                healthCallbacksRef.current.onConnectionStateChange?.(pc.connectionState);
                 
                 if (pc.connectionState === 'disconnected') {
                     console.warn('[WebRTC] Connection disconnected - may reconnect');
@@ -150,6 +177,7 @@ export const useWebRTC = () => {
                         connected: false, 
                         error: 'WebRTC connection failed - please reconnect'
                     }));
+                    healthCallbacksRef.current.onDisconnect?.('connection_failed');
                 } else if (pc.connectionState === 'closed') {
                     console.warn('[WebRTC] Connection closed');
                     setState(s => ({ ...s, connected: false }));
@@ -168,6 +196,7 @@ export const useWebRTC = () => {
                         connected: false, 
                         error: 'ICE connection failed - network issue'
                     }));
+                    healthCallbacksRef.current.onDisconnect?.('ice_failed');
                 }
             };
 
@@ -242,23 +271,24 @@ export const useWebRTC = () => {
                 sdp: answerSdp
             }));
 
-            setState({ connected: true, connecting: false, error: null });
+            setState({ connected: true, connecting: false, error: null, connectionState: 'connected', dataChannelState: 'open' });
             console.log('[WebRTC] Connected successfully');
             console.log('[WebRTC] Session started at:', new Date().toISOString());
 
         } catch (err) {
             const error = err instanceof Error ? err.message : 'Connection failed';
             console.error('WebRTC connection error:', err);
-            setState({ connected: false, connecting: false, error });
+            setState({ connected: false, connecting: false, error, connectionState: 'failed', dataChannelState: 'closed' });
             cleanup();
             throw err;
         }
     }, []);
 
     const disconnect = useCallback(() => {
+        healthCallbacksRef.current.onDisconnect?.('user_initiated');
         cleanup();
-        setState({ connected: false, connecting: false, error: null });
-        console.log('WebRTC disconnected');
+        setState({ connected: false, connecting: false, error: null, connectionState: 'closed', dataChannelState: 'closed' });
+        console.log('[WebRTC] Disconnected by user');
     }, []);
 
     const cleanup = () => {
