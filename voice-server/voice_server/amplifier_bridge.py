@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 def _make_json_safe(obj: Any) -> Any:
     """
     Convert any object to a JSON-safe representation.
-    
+
     Handles:
     - Dicts and lists recursively
     - Objects with to_dict() or __dict__
@@ -31,20 +31,20 @@ def _make_json_safe(obj: Any) -> Any:
     """
     if obj is None or isinstance(obj, (str, int, float, bool)):
         return obj
-    
+
     if isinstance(obj, dict):
         return {k: _make_json_safe(v) for k, v in obj.items()}
-    
+
     if isinstance(obj, (list, tuple)):
         return [_make_json_safe(item) for item in obj]
-    
+
     # Try common serialization methods
-    if hasattr(obj, 'to_dict') and callable(obj.to_dict):
+    if hasattr(obj, "to_dict") and callable(obj.to_dict):
         return _make_json_safe(obj.to_dict())
-    
-    if hasattr(obj, '__dict__'):
+
+    if hasattr(obj, "__dict__"):
         return _make_json_safe(obj.__dict__)
-    
+
     # Fallback: string representation
     return str(obj)
 
@@ -52,6 +52,7 @@ def _make_json_safe(obj: Any) -> Any:
 @dataclass
 class ToolResult:
     """Result from executing a tool."""
+
     success: bool
     output: Any
     error: Optional[str] = None
@@ -70,11 +71,11 @@ class ToolResult:
 class AmplifierBridge:
     """
     Programmatic Amplifier integration - no CLI subprocess!
-    
+
     Creates a long-lived AmplifierSession with all tools mounted.
     Tools are executed via direct coordinator calls.
     """
-    
+
     def __init__(self, bundle_name: str = "amplifier-dev", cwd: Optional[str] = None):
         self._bundle_name = bundle_name
         self._cwd = Path(cwd) if cwd else Path.cwd()
@@ -83,85 +84,91 @@ class AmplifierBridge:
         self._prepared = None  # Store prepared bundle for spawning
         self._tools: Dict[str, Dict[str, Any]] = {}
         self._initialized = False
-    
+
     async def initialize(self) -> None:
         """Initialize long-lived Amplifier session with all tools."""
         if self._initialized:
             return
-        
+
         logger.info(f"Initializing Amplifier bridge with bundle: {self._bundle_name}")
-        
+
         try:
             # Import here to avoid issues if amplifier-foundation not installed
             from amplifier_foundation import load_bundle
             import os
-            
+
             # Load foundation bundle (includes all tools)
             logger.debug(f"Loading bundle: {self._bundle_name}")
             bundle = await load_bundle(self._bundle_name)
-            
+
             # Add Anthropic provider for task tool delegation (if API key available)
             anthropic_api_key = os.environ.get("ANTHROPIC_API_KEY")
             if anthropic_api_key:
-                logger.info("Configuring Anthropic (Claude Opus) provider for Amplifier sessions")
+                logger.info(
+                    "Configuring Anthropic (Claude Opus) provider for Amplifier sessions"
+                )
                 if not bundle.providers:
                     bundle.providers = []
-                
+
                 # Add Anthropic provider with Opus model
                 # CRITICAL: Must include "source" field so Amplifier knows where to download the module
-                bundle.providers.append({
-                    "module": "provider-anthropic",
-                    "source": "git+https://github.com/microsoft/amplifier-module-provider-anthropic@main",
-                    "config": {
-                        "priority": 1,
-                        "default_model": "claude-opus-4-5-20251101",  # Specific Opus 4.5 version
+                bundle.providers.append(
+                    {
+                        "module": "provider-anthropic",
+                        "source": "git+https://github.com/microsoft/amplifier-module-provider-anthropic@main",
+                        "config": {
+                            "priority": 1,
+                            "default_model": "claude-opus-4-5-20251101",  # Specific Opus 4.5 version
+                        },
                     }
-                })
+                )
             else:
-                logger.warning("ANTHROPIC_API_KEY not set - task tool delegation will not work")
-            
+                logger.warning(
+                    "ANTHROPIC_API_KEY not set - task tool delegation will not work"
+                )
+
             # Prepare (resolve modules)
             logger.debug("Preparing bundle (resolving modules)...")
             self._prepared = await bundle.prepare()
-            
+
             # Create session
             logger.debug(f"Creating session with cwd: {self._cwd}")
-            self._session = await self._prepared.create_session(
-                session_cwd=self._cwd
-            )
-            
+            self._session = await self._prepared.create_session(session_cwd=self._cwd)
+
             self._coordinator = self._session.coordinator
-            
+
             # Initialize session (mounts all modules/tools)
             logger.debug("Initializing session (mounting modules)...")
             await self._session.initialize()
-            
+
             # Register spawning capability for task tool (must be after initialize)
             self._register_spawn_capability()
-            
+
             # Discover mounted tools
             await self._discover_tools()
-            
+
             self._initialized = True
             logger.info(f"Amplifier bridge initialized with {len(self._tools)} tools")
-            
+
         except ImportError as e:
             logger.error(f"Failed to import amplifier-foundation: {e}")
-            logger.error("Make sure amplifier-foundation is installed: pip install amplifier-foundation")
+            logger.error(
+                "Make sure amplifier-foundation is installed: pip install amplifier-foundation"
+            )
             raise RuntimeError("amplifier-foundation not available") from e
-            
+
         except Exception as e:
             logger.error(f"Failed to initialize Amplifier: {e}", exc_info=True)
             raise
-    
+
     def _register_spawn_capability(self) -> None:
         """Register session.spawn capability for task tool agent delegation.
-        
+
         This enables the task tool to spawn sub-sessions for agents.
         Implementation based on amplifier-foundation/examples/07_full_workflow.py
         """
         from amplifier_foundation import Bundle
-        
+
         async def spawn_capability(
             agent_name: str,
             instruction: str,
@@ -175,7 +182,7 @@ class AmplifierBridge:
             parent_messages: Optional[List[Dict[str, Any]]] = None,
         ) -> Dict[str, Any]:
             """Spawn sub-session for agent delegation.
-            
+
             Args:
                 agent_name: Name of the agent to spawn.
                 instruction: Task instruction for the agent.
@@ -187,25 +194,31 @@ class AmplifierBridge:
                 orchestrator_config: Optional orchestrator config for rate limiting, etc.
                 provider_preferences: Ordered list of provider/model preferences.
                 parent_messages: Optional messages from parent to inject into child context.
-            
+
             Returns:
                 Dict with result from spawned agent.
             """
-            logger.info(f"Spawning agent: {agent_name} with instruction: {instruction[:100]}...")
-            
+            logger.info(
+                f"Spawning agent: {agent_name} with instruction: {instruction[:100]}..."
+            )
+
             # Resolve agent name to configuration
             if agent_name in agent_configs:
                 config = agent_configs[agent_name]
-            elif self._prepared and hasattr(self._prepared.bundle, 'agents') and agent_name in self._prepared.bundle.agents:
+            elif (
+                self._prepared
+                and hasattr(self._prepared.bundle, "agents")
+                and agent_name in self._prepared.bundle.agents
+            ):
                 config = self._prepared.bundle.agents[agent_name]
             else:
                 available = list(agent_configs.keys())
-                if self._prepared and hasattr(self._prepared.bundle, 'agents'):
+                if self._prepared and hasattr(self._prepared.bundle, "agents"):
                     available += list(self._prepared.bundle.agents.keys())
                 error_msg = f"Agent '{agent_name}' not found. Available: {available}"
                 logger.error(error_msg)
                 raise ValueError(error_msg)
-            
+
             # Create child bundle from agent config
             child_bundle = Bundle(
                 name=agent_name,
@@ -214,26 +227,31 @@ class AmplifierBridge:
                 providers=config.get("providers", []),
                 tools=config.get("tools", []),
                 hooks=config.get("hooks", []),
-                instruction=config.get("instruction") or config.get("system", {}).get("instruction"),
+                instruction=config.get("instruction")
+                or config.get("system", {}).get("instruction"),
             )
-            
+
             # Apply tool/hook inheritance to child bundle's spawn config
             # These control which tools/hooks the child session inherits from parent
             if tool_inheritance or hook_inheritance:
                 child_bundle.spawn = {}
-                
+
                 if tool_inheritance:
                     if "exclude_tools" in tool_inheritance:
-                        child_bundle.spawn["exclude_tools"] = tool_inheritance["exclude_tools"]
+                        child_bundle.spawn["exclude_tools"] = tool_inheritance[
+                            "exclude_tools"
+                        ]
                     elif "inherit_tools" in tool_inheritance:
                         child_bundle.spawn["tools"] = tool_inheritance["inherit_tools"]
-                
+
                 if hook_inheritance:
                     if "exclude_hooks" in hook_inheritance:
-                        child_bundle.spawn["exclude_hooks"] = hook_inheritance["exclude_hooks"]
+                        child_bundle.spawn["exclude_hooks"] = hook_inheritance[
+                            "exclude_hooks"
+                        ]
                     elif "inherit_hooks" in hook_inheritance:
                         child_bundle.spawn["hooks"] = hook_inheritance["inherit_hooks"]
-            
+
             # Use PreparedBundle.spawn() to handle the heavy lifting
             logger.debug(f"Delegating to prepared.spawn() for agent: {agent_name}")
             return await self._prepared.spawn(
@@ -245,125 +263,135 @@ class AmplifierBridge:
                 provider_preferences=provider_preferences,
                 parent_messages=parent_messages,
             )
-        
+
         # Register the capability with the coordinator
         self._coordinator.register_capability("session.spawn", spawn_capability)
         logger.info("Registered session.spawn capability for task tool")
-    
+
     async def _discover_tools(self):
         """Enumerate tools from the coordinator using public API."""
         if not self._coordinator:
             logger.warning("No coordinator available for tool discovery")
             return
-        
+
         # Get all mounted tools using public API
         tools_dict = self._coordinator.get("tools")
-        
+
         if not tools_dict:
             logger.warning("No tools mounted on coordinator")
             return
-        
+
         logger.debug(f"Found {len(tools_dict)} mounted tools")
-        
+
         for tool_name, tool in tools_dict.items():
             try:
                 # Get basic tool info from protocol
-                description = tool.description if hasattr(tool, 'description') else ""
-                
+                description = tool.description if hasattr(tool, "description") else ""
+
                 # Get input schema (modern tools use input_schema attribute)
                 parameters = {}
-                if hasattr(tool, 'input_schema'):
+                if hasattr(tool, "input_schema"):
                     try:
                         parameters = tool.input_schema
-                        logger.debug(f"Tool {tool_name} has input_schema with {len(parameters.get('properties', {}))} parameters")
+                        logger.debug(
+                            f"Tool {tool_name} has input_schema with {len(parameters.get('properties', {}))} parameters"
+                        )
                     except Exception as e:
                         logger.debug(f"Tool {tool_name} input_schema error: {e}")
-                
+
                 self._tools[tool_name] = {
                     "name": tool_name,
                     "description": description,
                     "parameters": parameters,
-                    "tool": tool  # Keep reference for execution
+                    "tool": tool,  # Keep reference for execution
                 }
-                
+
                 logger.debug(f"Discovered tool: {tool_name} - {description[:100]}...")
-                
+
             except Exception as e:
                 logger.warning(f"Failed to register tool {tool_name}: {e}")
                 continue
-    
+
+    # Tools to expose to the realtime model (others available to agents internally)
+    # Using only orchestration tools forces delegation to agents for actual work
+    REALTIME_TOOLS = {"todo", "task"}
+
     def get_tools_for_openai(self) -> List[Dict[str, Any]]:
         """
         Convert Amplifier tools to OpenAI function format.
-        
+
+        Only exposes REALTIME_TOOLS to the voice model, forcing it to delegate
+        actual work to agents via the task tool. All tools remain available
+        internally for agent execution.
+
         Returns list of function definitions ready for OpenAI API.
         Ensures all schemas are JSON-safe for OpenAI.
         """
         openai_tools = []
-        
+
         for tool_info in self._tools.values():
+            # Only expose orchestration tools to realtime model
+            if tool_info["name"] not in self.REALTIME_TOOLS:
+                continue
+
             # Ensure the entire tool definition is JSON-safe
             tool_def = {
                 "type": "function",
                 "name": tool_info["name"],
-                "description": str(tool_info["description"]) if tool_info["description"] else "",
-                "parameters": _make_json_safe(tool_info["parameters"])
+                "description": str(tool_info["description"])
+                if tool_info["description"]
+                else "",
+                "parameters": _make_json_safe(tool_info["parameters"]),
             }
             openai_tools.append(tool_def)
-        
+
         return openai_tools
-    
+
     # Alias for backward compatibility
     def get_tools(self) -> List[Dict[str, Any]]:
         """Alias for get_tools_for_openai()."""
         return self.get_tools_for_openai()
-    
+
     async def execute_tool(
-        self,
-        tool_name: str,
-        arguments: Dict[str, Any]
+        self, tool_name: str, arguments: Dict[str, Any]
     ) -> ToolResult:
         """
         Execute tool via coordinator - direct Python call, no subprocess!
-        
+
         Args:
             tool_name: Name of the tool to execute
             arguments: Tool arguments as dict
-        
+
         Returns:
             ToolResult with success/output/error
         """
         if tool_name not in self._tools:
             logger.error(f"Unknown tool: {tool_name}")
             return ToolResult(
-                success=False,
-                output=None,
-                error=f"Unknown tool: {tool_name}"
+                success=False, output=None, error=f"Unknown tool: {tool_name}"
             )
-        
+
         try:
-            logger.info(f"Executing tool: {tool_name} with args: {json.dumps(arguments, indent=2)}")
-            
+            logger.info(
+                f"Executing tool: {tool_name} with args: {json.dumps(arguments, indent=2)}"
+            )
+
             # Get the tool instance
             tool_info = self._tools[tool_name]
             tool = tool_info["tool"]
-            
+
             # Execute using Tool protocol method
             result = await tool.execute(arguments)
-            
+
             logger.info(f"Tool {tool_name} completed successfully")
             logger.debug(f"Result: {result}")
-            
+
             return ToolResult(success=True, output=result)
-            
+
         except Exception as e:
             logger.error(f"Tool {tool_name} failed: {e}", exc_info=True)
-            return ToolResult(
-                success=False,
-                output=None,
-                error=str(e)
-            )
-    
+            return ToolResult(success=False, output=None, error=str(e))
+
     async def close(self):
         """Cleanup session resources."""
         if self._session:
@@ -377,7 +405,7 @@ class AmplifierBridge:
                 self._coordinator = None
                 self._tools.clear()
                 self._initialized = False
-    
+
     async def cleanup(self):
         """Alias for close() for backward compatibility."""
         await self.close()
@@ -387,30 +415,32 @@ class AmplifierBridge:
 _bridge_instance: Optional[AmplifierBridge] = None
 
 
-async def get_amplifier_bridge(bundle: str = "amplifier-dev", cwd: Optional[str] = None) -> AmplifierBridge:
+async def get_amplifier_bridge(
+    bundle: str = "amplifier-dev", cwd: Optional[str] = None
+) -> AmplifierBridge:
     """
     Get or create the global Amplifier bridge instance.
-    
+
     Args:
         bundle: Bundle name to load (default: amplifier-dev)
         cwd: Working directory for the session
-    
+
     Returns:
         Initialized AmplifierBridge instance
     """
     global _bridge_instance
-    
+
     if _bridge_instance is None:
         _bridge_instance = AmplifierBridge(bundle_name=bundle, cwd=cwd)
         await _bridge_instance.initialize()
-    
+
     return _bridge_instance
 
 
 async def cleanup_amplifier_bridge() -> None:
     """Clean up the global bridge instance."""
     global _bridge_instance
-    
+
     if _bridge_instance:
         logger.info("Cleaning up Amplifier bridge...")
         await _bridge_instance.cleanup()
