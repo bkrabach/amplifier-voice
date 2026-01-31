@@ -259,6 +259,7 @@ class AmplifierBridge:
                 instruction=instruction,
                 session_id=sub_session_id,
                 parent_session=parent_session,
+                session_cwd=self._cwd,  # Pass configured working directory (Path object)
                 orchestrator_config=orchestrator_config,
                 provider_preferences=provider_preferences,
                 parent_messages=parent_messages,
@@ -313,8 +314,8 @@ class AmplifierBridge:
                 continue
 
     # Tools to expose to the realtime model (others available to agents internally)
-    # Using only orchestration tools forces delegation to agents for actual work
-    REALTIME_TOOLS = {"todo", "task"}
+    # Only task tool - forces ALL work to be delegated to agents
+    REALTIME_TOOLS = {"task"}
 
     def get_tools_for_openai(self) -> List[Dict[str, Any]]:
         """
