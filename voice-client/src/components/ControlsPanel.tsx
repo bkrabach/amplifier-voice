@@ -10,6 +10,7 @@ import { PhoneFilled, DismissCircleFilled } from '@fluentui/react-icons';
 
 interface ControlsPanelProps {
     connected: boolean;
+    connecting?: boolean;
     onStart: () => void;
     onDisconnect: () => void;
 }
@@ -26,7 +27,7 @@ const useStyles = makeStyles({
     },
 });
 
-export const ControlsPanel: React.FC<ControlsPanelProps> = ({ connected, onStart, onDisconnect }) => {
+export const ControlsPanel: React.FC<ControlsPanelProps> = ({ connected, connecting, onStart, onDisconnect }) => {
     const styles = useStyles();
 
     return (
@@ -36,9 +37,9 @@ export const ControlsPanel: React.FC<ControlsPanelProps> = ({ connected, onStart
                     appearance="primary"
                     icon={<PhoneFilled />}
                     onClick={onStart}
-                    disabled={connected}
+                    disabled={connecting}
                 >
-                    Start Voice Chat
+                    {connecting ? 'Connecting...' : 'Start Voice Chat'}
                 </Button>
             ) : (
                 <Button
@@ -51,9 +52,9 @@ export const ControlsPanel: React.FC<ControlsPanelProps> = ({ connected, onStart
             )}
             <Badge
                 appearance='filled'
-                color={connected ? "success" : "severe"}
+                color={connected ? "success" : connecting ? "warning" : "severe"}
             >
-                <Text>{connected ? "Connected" : "Disconnected"}</Text>
+                <Text>{connected ? "Connected" : connecting ? "Connecting" : "Disconnected"}</Text>
             </Badge>
         </div>
     );

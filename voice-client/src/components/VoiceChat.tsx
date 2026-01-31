@@ -46,6 +46,31 @@ const useStyles = makeStyles({
         color: tokens.colorNeutralForeground3,
         fontFamily: 'monospace',
     },
+    connectionStatus: {
+        fontSize: tokens.fontSizeBase200,
+        fontFamily: 'monospace',
+        padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalS}`,
+        borderRadius: tokens.borderRadiusSmall,
+        marginLeft: 'auto',
+    },
+    statusConnected: {
+        backgroundColor: tokens.colorPaletteGreenBackground2,
+        color: tokens.colorPaletteGreenForeground2,
+    },
+    statusDisconnected: {
+        backgroundColor: tokens.colorPaletteRedBackground2,
+        color: tokens.colorPaletteRedForeground2,
+    },
+    statusConnecting: {
+        backgroundColor: tokens.colorPaletteYellowBackground2,
+        color: tokens.colorPaletteYellowForeground2,
+    },
+    errorBanner: {
+        backgroundColor: tokens.colorPaletteRedBackground1,
+        color: tokens.colorPaletteRedForeground1,
+        padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalL}`,
+        fontSize: tokens.fontSizeBase200,
+    },
     content: {
         flex: 1,
         display: 'flex',
@@ -66,7 +91,11 @@ export const VoiceChat: React.FC = () => {
     const styles = useStyles();
     const [showSessionPicker, setShowSessionPicker] = useState(false);
     const { 
-        connected, 
+        connected,
+        connecting,
+        connectionError,
+        connectionState,
+        dataChannelState,
         transcripts, 
         audioRef, 
         sessionId,
@@ -106,7 +135,24 @@ export const VoiceChat: React.FC = () => {
                             Session: {sessionId.slice(0, 8)}...
                         </span>
                     )}
+                    <span className={`${styles.connectionStatus} ${
+                        connected ? styles.statusConnected : 
+                        connecting ? styles.statusConnecting : 
+                        styles.statusDisconnected
+                    }`}>
+                        {connected ? `✓ ${connectionState}` : 
+                         connecting ? '⟳ connecting...' : 
+                         `○ ${connectionState || 'disconnected'}`}
+                        {dataChannelState && ` | dc:${dataChannelState}`}
+                    </span>
                 </div>
+                
+                {/* Error banner */}
+                {connectionError && (
+                    <div className={styles.errorBanner}>
+                        ⚠️ {connectionError}
+                    </div>
+                )}
                 
                 <div className={styles.content}>
                     <TranscriptDisplay transcripts={transcripts} />
@@ -114,6 +160,7 @@ export const VoiceChat: React.FC = () => {
                 <div className={styles.controls}>
                     <ControlsPanel
                         connected={connected}
+                        connecting={connecting}
                         onStart={startVoiceChat}
                         onDisconnect={disconnectVoiceChat}
                     />

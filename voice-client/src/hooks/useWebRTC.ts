@@ -17,13 +17,17 @@ interface WebRTCState {
     connected: boolean;
     connecting: boolean;
     error: string | null;
+    connectionState: string;  // Track detailed connection state
+    dataChannelState: string; // Track data channel state
 }
 
 export const useWebRTC = () => {
     const [state, setState] = useState<WebRTCState>({
         connected: false,
         connecting: false,
-        error: null
+        error: null,
+        connectionState: 'new',
+        dataChannelState: 'closed'
     });
 
     const audioRef = useRef<HTMLAudioElement>(null);
@@ -66,7 +70,8 @@ export const useWebRTC = () => {
             dataChannelRef.current = dataChannel;
 
             dataChannel.onopen = () => {
-                console.log('Data channel opened');
+                console.log('[WebRTC] Data channel opened');
+                setState(s => ({ ...s, dataChannelState: 'open' }));
                 
                 // Configure session for voice (GA API)
                 // Structure per OpenAI docs - nested under session.audio.input
@@ -107,7 +112,18 @@ export const useWebRTC = () => {
             };
 
             dataChannel.onerror = (e) => {
-                console.error('Data channel error:', e);
+                console.error('[WebRTC] Data channel error:', e);
+                setState(s => ({ ...s, error: 'Data channel error' }));
+            };
+
+            dataChannel.onclose = () => {
+                console.warn('[WebRTC] Data channel closed');
+                setState(s => ({ 
+                    ...s, 
+                    dataChannelState: 'closed',
+                    connected: false,
+                    error: 'Data channel closed - session may have timed out'
+                }));
             };
 
             // Handle incoming data channels from server
@@ -118,6 +134,41 @@ export const useWebRTC = () => {
                 channel.onmessage = (e) => {
                     onMessage(e.data, channel);
                 };
+            };
+
+            // Monitor connection state for debugging and auto-reconnect
+            pc.onconnectionstatechange = () => {
+                console.log('[WebRTC] Connection state:', pc.connectionState);
+                setState(s => ({ ...s, connectionState: pc.connectionState }));
+                
+                if (pc.connectionState === 'disconnected') {
+                    console.warn('[WebRTC] Connection disconnected - may reconnect');
+                } else if (pc.connectionState === 'failed') {
+                    console.error('[WebRTC] Connection failed');
+                    setState(s => ({ 
+                        ...s, 
+                        connected: false, 
+                        error: 'WebRTC connection failed - please reconnect'
+                    }));
+                } else if (pc.connectionState === 'closed') {
+                    console.warn('[WebRTC] Connection closed');
+                    setState(s => ({ ...s, connected: false }));
+                }
+            };
+
+            pc.oniceconnectionstatechange = () => {
+                console.log('[WebRTC] ICE connection state:', pc.iceConnectionState);
+                
+                if (pc.iceConnectionState === 'disconnected') {
+                    console.warn('[WebRTC] ICE disconnected - connection may be unstable');
+                } else if (pc.iceConnectionState === 'failed') {
+                    console.error('[WebRTC] ICE connection failed');
+                    setState(s => ({ 
+                        ...s, 
+                        connected: false, 
+                        error: 'ICE connection failed - network issue'
+                    }));
+                }
             };
 
             // Handle incoming audio track
@@ -192,7 +243,8 @@ export const useWebRTC = () => {
             }));
 
             setState({ connected: true, connecting: false, error: null });
-            console.log('WebRTC connected successfully');
+            console.log('[WebRTC] Connected successfully');
+            console.log('[WebRTC] Session started at:', new Date().toISOString());
 
         } catch (err) {
             const error = err instanceof Error ? err.message : 'Connection failed';
@@ -305,6 +357,8 @@ export const useWebRTC = () => {
         connected: state.connected,
         connecting: state.connecting,
         error: state.error,
+        connectionState: state.connectionState,
+        dataChannelState: state.dataChannelState,
         audioRef,
         peerConnection: pcRef.current,
         dataChannel: dataChannelRef.current,

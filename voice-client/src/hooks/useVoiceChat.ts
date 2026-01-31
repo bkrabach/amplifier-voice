@@ -5,7 +5,17 @@ import { VoiceChatEvent } from '../models/VoiceChatEvent';
 import { useTranscriptStore } from '../stores/transcriptStore';
 
 export const useVoiceChat = () => {
-    const { connected, audioRef, connect, disconnect, injectContext } = useWebRTC();
+    const { 
+        connected, 
+        connecting,
+        error: connectionError,
+        connectionState,
+        dataChannelState,
+        audioRef, 
+        connect, 
+        disconnect, 
+        injectContext 
+    } = useWebRTC();
     const { messages, handleEvent, clearMessages, loadPreviousMessages } = useChatMessages();
     const { 
         sessionId, 
@@ -82,6 +92,10 @@ export const useVoiceChat = () => {
 
     return {
         connected,
+        connecting,
+        connectionError,
+        connectionState,
+        dataChannelState,
         transcripts: messages,
         audioRef,
         sessionId,
