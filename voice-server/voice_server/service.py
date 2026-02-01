@@ -7,12 +7,15 @@ This service provides:
 - WebRTC signaling endpoints
 """
 
+import asyncio
+import json
 import logging
 from typing import Callable, Any, Dict, Optional
 from contextlib import asynccontextmanager, AsyncExitStack
 
 from fastapi import FastAPI, Request, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 
 from . import settings
 from .amplifier_bridge import (
@@ -150,6 +153,72 @@ def service_init(app: FastAPI, register_lifespan_handler: Callable):
             },
             "model": settings.realtime.model,
         }
+
+    # ============ Event Streaming (SSE) for Debugging ============
+
+    @app.get("/events")
+    async def event_stream(request: Request):
+        """
+        Server-Sent Events stream of ALL Amplifier events for debugging.
+
+        Opens a persistent connection that streams raw Amplifier events
+        (LLM requests/responses, tool calls, session events) to the browser
+        console for full debugging visibility.
+
+        Events are color-coded in the browser console:
+        - 🔼 provider_request (amber) - Raw LLM requests
+        - 🔽 provider_response (green) - Raw LLM responses
+        - 🔧 tool_call/tool_result (blue) - Tool execution
+        - 🔀 session_fork (purple) - Agent delegation
+        - 💬 content_* (gray) - Content streaming
+        """
+        if not _amplifier_bridge:
+            raise HTTPException(
+                status_code=503, detail="Amplifier bridge not initialized"
+            )
+
+        async def generate_events():
+            """Generator that yields SSE-formatted events from the queue."""
+            logger.info("[SSE] Client connected to event stream")
+            
+            try:
+                while True:
+                    # Check if client disconnected
+                    if await request.is_disconnected():
+                        logger.info("[SSE] Client disconnected")
+                        break
+
+                    try:
+                        # Wait for event with timeout to check for disconnect
+                        event = await asyncio.wait_for(
+                            _amplifier_bridge.event_queue.get(),
+                            timeout=30.0  # Send keepalive every 30s
+                        )
+                        
+                        # Format as SSE
+                        event_data = json.dumps(event)
+                        yield f"data: {event_data}\n\n"
+                        
+                    except asyncio.TimeoutError:
+                        # Send keepalive comment to prevent connection timeout
+                        yield ": keepalive\n\n"
+                        
+            except asyncio.CancelledError:
+                logger.info("[SSE] Event stream cancelled")
+            except Exception as e:
+                logger.error(f"[SSE] Error in event stream: {e}")
+            finally:
+                logger.info("[SSE] Event stream closed")
+
+        return StreamingResponse(
+            generate_events(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",  # Disable nginx buffering
+            },
+        )
 
     # ============ Session & Transcript Endpoints ============
 

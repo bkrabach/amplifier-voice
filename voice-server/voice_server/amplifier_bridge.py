@@ -11,6 +11,7 @@ Architecture:
 - Amplifier Foundation: Bundle loading, session lifecycle, coordinator
 """
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass
@@ -18,6 +19,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+# Event streaming for debugging
+from voice_server.protocols.event_streaming import (
+    EventStreamingHook,
+    EVENTS_TO_CAPTURE,
+)
 
 
 def _make_json_safe(obj: Any) -> Any:
@@ -84,6 +91,10 @@ class AmplifierBridge:
         self._prepared = None  # Store prepared bundle for spawning
         self._tools: Dict[str, Dict[str, Any]] = {}
         self._initialized = False
+        
+        # Event streaming for debugging
+        self._event_queue: asyncio.Queue[Dict[str, Any]] = asyncio.Queue()
+        self._streaming_hook: Optional[EventStreamingHook] = None
 
     async def initialize(self) -> None:
         """Initialize long-lived Amplifier session with all tools."""
@@ -173,6 +184,9 @@ class AmplifierBridge:
             logger.debug("Initializing session (mounting modules)...")
             await self._session.initialize()
 
+            # Register event streaming hook for debugging
+            self._register_event_streaming_hook()
+
             # Register spawning capability for task tool (must be after initialize)
             self._register_spawn_capability()
 
@@ -192,6 +206,46 @@ class AmplifierBridge:
         except Exception as e:
             logger.error(f"Failed to initialize Amplifier: {e}", exc_info=True)
             raise
+
+    def _register_event_streaming_hook(self) -> None:
+        """Register event streaming hook for debugging.
+
+        Captures ALL Amplifier events and queues them for SSE streaming
+        to the browser console for full debugging visibility.
+        """
+        if not self._coordinator:
+            logger.warning("No coordinator available for event streaming hook")
+            return
+
+        # Create the streaming hook
+        self._streaming_hook = EventStreamingHook(self._event_queue)
+
+        # Get hook registry from coordinator
+        hook_registry = self._coordinator.get("hooks")
+        if not hook_registry:
+            logger.warning("No hook registry available - event streaming disabled")
+            return
+
+        # Register hook for ALL events we want to capture
+        registered_count = 0
+        for event in EVENTS_TO_CAPTURE:
+            try:
+                hook_registry.register(
+                    event=event,
+                    handler=self._streaming_hook,
+                    priority=100,  # Run early to capture events
+                    name=f"voice-streaming:{event}",
+                )
+                registered_count += 1
+            except Exception as e:
+                logger.debug(f"Could not register hook for {event}: {e}")
+
+        logger.info(f"Registered event streaming hook for {registered_count} events")
+
+    @property
+    def event_queue(self) -> asyncio.Queue[Dict[str, Any]]:
+        """Get the event queue for SSE streaming."""
+        return self._event_queue
 
     def _register_spawn_capability(self) -> None:
         """Register session.spawn and session.resume capabilities for delegate tool.
