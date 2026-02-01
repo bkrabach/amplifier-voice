@@ -15,6 +15,7 @@ export interface Message {
     // Extended message properties for Amplifier integration
     type?: MessageType;
     toolName?: string;       // For tool status messages
+    toolCallId?: string;     // Unique ID to distinguish multiple calls to same tool
     toolStatus?: 'executing' | 'completed' | 'error';
     displayLevel?: 'info' | 'warning' | 'error' | 'success';
 }

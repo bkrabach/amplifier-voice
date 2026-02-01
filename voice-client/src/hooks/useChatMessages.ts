@@ -118,7 +118,7 @@ export const useChatMessages = () => {
     const executeToolCall = useCallback(async (toolCall: ToolCall) => {
         console.log('Executing tool via Amplifier:', toolCall.name);
 
-        // Show executing status
+        // Show executing status - use toolCall.id to uniquely identify this specific call
         const statusMessage: Message = {
             sender: 'system',
             text: `Using ${getFriendlyToolName(toolCall.name)}...`,
@@ -126,6 +126,7 @@ export const useChatMessages = () => {
             isSystem: true,
             type: 'tool_status',
             toolName: toolCall.name,
+            toolCallId: toolCall.id,  // Unique ID to distinguish multiple calls to same tool
             toolStatus: 'executing'
         };
         setMessages(prev => [...prev, statusMessage]);
@@ -144,9 +145,9 @@ export const useChatMessages = () => {
             const result = await response.json() as AmplifierToolResult;
             console.log('Tool result:', result);
 
-            // Update status message
+            // Update status message - match by toolCallId to only update THIS specific call
             setMessages(prev => prev.map(msg =>
-                msg.type === 'tool_status' && msg.toolName === toolCall.name && msg.toolStatus === 'executing'
+                msg.type === 'tool_status' && msg.toolCallId === toolCall.id && msg.toolStatus === 'executing'
                     ? {
                         ...msg,
                         text: result.success
@@ -197,9 +198,9 @@ export const useChatMessages = () => {
             const error = err instanceof Error ? err.message : 'Unknown error';
             console.error('Tool execution error:', error);
 
-            // Update status to error
+            // Update status to error - match by toolCallId to only update THIS specific call
             setMessages(prev => prev.map(msg =>
-                msg.type === 'tool_status' && msg.toolName === toolCall.name && msg.toolStatus === 'executing'
+                msg.type === 'tool_status' && msg.toolCallId === toolCall.id && msg.toolStatus === 'executing'
                     ? { ...msg, text: `Error: ${error}`, toolStatus: 'error', isError: true }
                     : msg
             ));
