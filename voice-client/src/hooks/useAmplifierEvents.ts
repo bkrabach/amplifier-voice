@@ -13,7 +13,7 @@
  * - 🧠 thinking_* (cyan) - Claude thinking blocks
  */
 
-import { useEffect, useRef, useCallback, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 const API_BASE = import.meta.env.VITE_API_BASE || '';
 
@@ -79,6 +79,69 @@ interface AmplifierEventsState {
   error: string | null;
 }
 
+function formatTimestamp(): string {
+  const now = new Date();
+  return now.toLocaleTimeString('en-US', {
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    fractionalSecondDigits: 3,
+  });
+}
+
+function logEvent(event: AmplifierEvent): void {
+  const eventType = event.type || 'unknown';
+  const style = EVENT_STYLES[eventType] || DEFAULT_STYLE;
+  const timestamp = formatTimestamp();
+
+  // Build log message
+  const prefix = `%c[${timestamp}] ${style.icon} ${style.label}`;
+  const prefixStyle = `color: ${style.color}; font-weight: bold;`;
+
+  // Log with expandable data
+  console.log(prefix, prefixStyle, event);
+
+  // For provider requests/responses, also log key details separately
+  if (eventType === 'provider_request' || eventType === 'llm_request') {
+    const messages = event.messages as unknown[];
+    const model = event.model as string;
+    if (messages?.length) {
+      console.log(
+        `%c    └─ Model: ${model || 'unknown'}, Messages: ${messages.length}`,
+        'color: #9ca3af; font-style: italic;'
+      );
+    }
+  }
+
+  if (eventType === 'provider_response' || eventType === 'llm_response') {
+    const usage = event.usage as { input_tokens?: number; output_tokens?: number };
+    if (usage) {
+      console.log(
+        `%c    └─ Tokens: ${usage.input_tokens || 0} in / ${usage.output_tokens || 0} out`,
+        'color: #9ca3af; font-style: italic;'
+      );
+    }
+  }
+
+  if (eventType === 'tool_call') {
+    const toolName = event.tool_name as string;
+    console.log(
+      `%c    └─ Tool: ${toolName}`,
+      'color: #9ca3af; font-style: italic;'
+    );
+  }
+
+  if (eventType === 'session_fork') {
+    const agent = event.agent as string;
+    const childId = event.child_session_id as string;
+    console.log(
+      `%c    └─ Agent: ${agent}, Child: ${childId?.slice(0, 8)}...`,
+      'color: #9ca3af; font-style: italic;'
+    );
+  }
+}
+
 export function useAmplifierEvents(options: UseAmplifierEventsOptions = {}) {
   const {
     autoConnect = true,
@@ -87,7 +150,14 @@ export function useAmplifierEvents(options: UseAmplifierEventsOptions = {}) {
     onEvent,
   } = options;
 
+  // Use refs to avoid dependency issues
   const eventSourceRef = useRef<EventSource | null>(null);
+  const optionsRef = useRef({ logToConsole, filterTypes, onEvent });
+  const mountedRef = useRef(true);
+
+  // Keep options ref updated
+  optionsRef.current = { logToConsole, filterTypes, onEvent };
+
   const [state, setState] = useState<AmplifierEventsState>({
     connected: false,
     eventCount: 0,
@@ -95,78 +165,12 @@ export function useAmplifierEvents(options: UseAmplifierEventsOptions = {}) {
     error: null,
   });
 
-  const formatTimestamp = useCallback(() => {
-    const now = new Date();
-    return now.toLocaleTimeString('en-US', {
-      hour12: false,
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      fractionalSecondDigits: 3,
-    });
-  }, []);
-
-  const logEvent = useCallback(
-    (event: AmplifierEvent) => {
-      if (!logToConsole) return;
-
-      const eventType = event.type || 'unknown';
-      const style = EVENT_STYLES[eventType] || DEFAULT_STYLE;
-      const timestamp = formatTimestamp();
-
-      // Build log message
-      const prefix = `%c[${timestamp}] ${style.icon} ${style.label}`;
-      const prefixStyle = `color: ${style.color}; font-weight: bold;`;
-
-      // Log with expandable data
-      console.log(prefix, prefixStyle, event);
-
-      // For provider requests/responses, also log key details separately
-      if (eventType === 'provider_request' || eventType === 'llm_request') {
-        const messages = event.messages as unknown[];
-        const model = event.model as string;
-        if (messages?.length) {
-          console.log(
-            `%c    └─ Model: ${model || 'unknown'}, Messages: ${messages.length}`,
-            'color: #9ca3af; font-style: italic;'
-          );
-        }
-      }
-
-      if (eventType === 'provider_response' || eventType === 'llm_response') {
-        const usage = event.usage as { input_tokens?: number; output_tokens?: number };
-        if (usage) {
-          console.log(
-            `%c    └─ Tokens: ${usage.input_tokens || 0} in / ${usage.output_tokens || 0} out`,
-            'color: #9ca3af; font-style: italic;'
-          );
-        }
-      }
-
-      if (eventType === 'tool_call') {
-        const toolName = event.tool_name as string;
-        console.log(
-          `%c    └─ Tool: ${toolName}`,
-          'color: #9ca3af; font-style: italic;'
-        );
-      }
-
-      if (eventType === 'session_fork') {
-        const agent = event.agent as string;
-        const childId = event.child_session_id as string;
-        console.log(
-          `%c    └─ Agent: ${agent}, Child: ${childId?.slice(0, 8)}...`,
-          'color: #9ca3af; font-style: italic;'
-        );
-      }
-    },
-    [logToConsole, formatTimestamp]
-  );
-
-  const connect = useCallback(() => {
+  // Connect function - stable, no dependencies
+  const connect = () => {
     // Close existing connection if any
     if (eventSourceRef.current) {
       eventSourceRef.current.close();
+      eventSourceRef.current = null;
     }
 
     console.log('%c[AmplifierEvents] Connecting to SSE stream...', 'color: #8b5cf6;');
@@ -175,14 +179,19 @@ export function useAmplifierEvents(options: UseAmplifierEventsOptions = {}) {
     eventSourceRef.current = eventSource;
 
     eventSource.onopen = () => {
+      if (!mountedRef.current) return;
       console.log('%c[AmplifierEvents] Connected to event stream', 'color: #22c55e;');
       setState((prev) => ({ ...prev, connected: true, error: null }));
     };
 
     eventSource.onmessage = (e) => {
+      if (!mountedRef.current) return;
+      
       try {
         const event: AmplifierEvent = JSON.parse(e.data);
         event.timestamp = formatTimestamp();
+
+        const { logToConsole, filterTypes, onEvent } = optionsRef.current;
 
         // Apply filter if specified
         if (filterTypes.length > 0 && !filterTypes.includes(event.type)) {
@@ -190,7 +199,9 @@ export function useAmplifierEvents(options: UseAmplifierEventsOptions = {}) {
         }
 
         // Log to console
-        logEvent(event);
+        if (logToConsole) {
+          logEvent(event);
+        }
 
         // Update state
         setState((prev) => ({
@@ -206,35 +217,47 @@ export function useAmplifierEvents(options: UseAmplifierEventsOptions = {}) {
       }
     };
 
-    eventSource.onerror = (e) => {
-      console.error('%c[AmplifierEvents] Connection error', 'color: #ef4444;', e);
+    eventSource.onerror = () => {
+      if (!mountedRef.current) return;
+      console.warn('%c[AmplifierEvents] Connection error (will auto-reconnect)', 'color: #f59e0b;');
       setState((prev) => ({
         ...prev,
         connected: false,
         error: 'Connection lost - will auto-reconnect',
       }));
     };
-  }, [filterTypes, formatTimestamp, logEvent, onEvent]);
+  };
 
-  const disconnect = useCallback(() => {
+  // Disconnect function - stable, no dependencies
+  const disconnect = () => {
     if (eventSourceRef.current) {
       console.log('%c[AmplifierEvents] Disconnecting...', 'color: #f59e0b;');
       eventSourceRef.current.close();
       eventSourceRef.current = null;
-      setState((prev) => ({ ...prev, connected: false }));
+      if (mountedRef.current) {
+        setState((prev) => ({ ...prev, connected: false }));
+      }
     }
-  }, []);
+  };
 
-  // Auto-connect on mount if enabled
+  // Auto-connect on mount - runs ONCE only
   useEffect(() => {
+    mountedRef.current = true;
+
     if (autoConnect) {
       connect();
     }
 
+    // Cleanup on unmount only
     return () => {
-      disconnect();
+      mountedRef.current = false;
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+        eventSourceRef.current = null;
+      }
     };
-  }, [autoConnect, connect, disconnect]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Empty deps - run once on mount
 
   return {
     ...state,
