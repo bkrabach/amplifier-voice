@@ -53,6 +53,11 @@ export const useChatMessages = () => {
     const activeToolCallRef = useRef<ToolCall | null>(null);
     const dataChannelRef = useRef<RTCDataChannel | null>(null);
     
+    // Async tool result handling - track response state and queue late-arriving results
+    // This solves the issue where tool results arrive while the model is already speaking
+    const responseInProgressRef = useRef<boolean>(false);
+    const pendingToolAnnouncementsRef = useRef<Array<{ toolName: string; callId: string }>>([]);
+    
     // Transcript capture
     const { addEntry: addTranscriptEntry } = useTranscriptStore();
 
@@ -87,6 +92,28 @@ export const useChatMessages = () => {
             console.warn('Data channel not ready');
         }
     }, []);
+
+    /**
+     * Flush pending tool announcements after response.done.
+     * This triggers the model to speak about tool results that arrived while it was busy.
+     */
+    const flushPendingAnnouncements = useCallback(() => {
+        if (pendingToolAnnouncementsRef.current.length === 0) return;
+        
+        const tools = pendingToolAnnouncementsRef.current.map(p => p.toolName).join(', ');
+        const count = pendingToolAnnouncementsRef.current.length;
+        console.log(`[ChatMessages] Flushing ${count} pending tool announcements: ${tools}`);
+        pendingToolAnnouncementsRef.current = [];
+        
+        // Trigger model to speak about the completed tools
+        sendToAssistant({
+            type: 'response.create',
+            response: {
+                instructions: `The ${tools} task(s) completed while you were speaking. Please report those results now briefly.`
+            }
+        });
+        responseInProgressRef.current = true;
+    }, [sendToAssistant]);
 
     const executeToolCall = useCallback(async (toolCall: ToolCall) => {
         console.log('Executing tool via Amplifier:', toolCall.name);
@@ -136,7 +163,7 @@ export const useChatMessages = () => {
                 ? (typeof result.output === 'string' ? result.output : JSON.stringify(result.output))
                 : JSON.stringify({ error: result.error || 'Unknown error' });
 
-            // Send result to assistant
+            // Send result to assistant - always inject the result into conversation
             sendToAssistant({
                 type: 'conversation.item.create',
                 item: {
@@ -146,10 +173,23 @@ export const useChatMessages = () => {
                 }
             });
 
-            // Trigger assistant response (GA API: no modalities parameter)
-            sendToAssistant({
-                type: 'response.create'
-            });
+            // Trigger response OR queue for later announcement
+            // This handles the case where a tool result arrives while the model is speaking
+            if (!responseInProgressRef.current) {
+                // No active response - trigger immediately
+                console.log(`[ChatMessages] Triggering response for ${toolCall.name} (no response in progress)`);
+                sendToAssistant({
+                    type: 'response.create'
+                });
+                responseInProgressRef.current = true;
+            } else {
+                // Response in progress - queue this for announcement after response.done
+                console.log(`[ChatMessages] Queueing ${toolCall.name} result - model busy speaking`);
+                pendingToolAnnouncementsRef.current.push({ 
+                    toolName: getFriendlyToolName(toolCall.name), 
+                    callId: toolCall.id 
+                });
+            }
 
             return result;
 
@@ -174,10 +214,18 @@ export const useChatMessages = () => {
                 }
             });
 
-            sendToAssistant({
-                type: 'response.create',
-                response: { modalities: ['audio', 'text'] }
-            });
+            // Trigger response OR queue (same logic as success path)
+            if (!responseInProgressRef.current) {
+                sendToAssistant({
+                    type: 'response.create'
+                });
+                responseInProgressRef.current = true;
+            } else {
+                pendingToolAnnouncementsRef.current.push({ 
+                    toolName: getFriendlyToolName(toolCall.name), 
+                    callId: toolCall.id 
+                });
+            }
 
             throw err;
         }
@@ -207,6 +255,25 @@ export const useChatMessages = () => {
         }
 
         switch (event.type) {
+            // Response lifecycle events - critical for async tool handling
+            case 'response.created':
+                // Model is starting a response - track state
+                responseInProgressRef.current = true;
+                console.log('[ChatMessages] Response started - blocking new response.create');
+                break;
+
+            case 'response.done':
+                // Model finished responding - flush any queued tool announcements
+                responseInProgressRef.current = false;
+                console.log('[ChatMessages] Response done - checking for pending announcements');
+                // Use setTimeout to avoid race conditions with tool results arriving
+                setTimeout(() => {
+                    if (pendingToolAnnouncementsRef.current.length > 0) {
+                        flushPendingAnnouncements();
+                    }
+                }, 100);
+                break;
+
             // User speech events
             case VoiceChatEventType.SPEECH_STARTED:
                 if (!activeUserMessageRef.current) {
