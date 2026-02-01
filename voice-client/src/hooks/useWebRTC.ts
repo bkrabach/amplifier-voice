@@ -92,6 +92,11 @@ export const useWebRTC = () => {
                 
                 // Configure session for voice (GA API)
                 // Structure per OpenAI docs - nested under session.audio.input
+                // 
+                // IMPORTANT: semantic_vad cannot be used on initial WebRTC connection
+                // We start with server_vad, then immediately update to semantic_vad
+                // semantic_vad uses AI to understand when user has SEMANTICALLY finished speaking
+                // (not just silence-based), which allows the model to stay silent during side conversations
                 const sessionUpdate = {
                     type: 'session.update',
                     session: {
@@ -108,7 +113,7 @@ export const useWebRTC = () => {
                                     model: 'gpt-4o-transcribe',
                                     language: 'en'  // Lock to English to avoid music being interpreted as other languages
                                 },
-                                // VAD for automatic turn detection
+                                // Start with server_vad (required for initial WebRTC connection)
                                 turn_detection: {
                                     type: 'server_vad',
                                     threshold: 0.5,
@@ -121,7 +126,35 @@ export const useWebRTC = () => {
                 };
                 
                 dataChannel.send(JSON.stringify(sessionUpdate));
-                console.log('Sent session.update for voice configuration:', JSON.stringify(sessionUpdate));
+                console.log('Sent initial session.update for voice configuration:', JSON.stringify(sessionUpdate));
+                
+                // Now upgrade to semantic_vad for smarter turn detection
+                // This allows the model to understand when users are semantically done speaking
+                // vs just pausing or having a side conversation
+                const semanticVadUpdate = {
+                    type: 'session.update',
+                    session: {
+                        type: 'realtime',
+                        audio: {
+                            input: {
+                                turn_detection: {
+                                    type: 'semantic_vad',
+                                    eagerness: 'low',  // Patient - waits longer for user to finish
+                                    create_response: true,  // Still auto-respond, but model can choose silence
+                                    interrupt_response: true  // Allow user to interrupt
+                                }
+                            }
+                        }
+                    }
+                };
+                
+                // Small delay to ensure first update is processed
+                setTimeout(() => {
+                    if (dataChannel.readyState === 'open') {
+                        dataChannel.send(JSON.stringify(semanticVadUpdate));
+                        console.log('Upgraded to semantic_vad:', JSON.stringify(semanticVadUpdate));
+                    }
+                }, 100);
             };
 
             dataChannel.onmessage = (e) => {

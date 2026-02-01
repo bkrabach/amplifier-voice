@@ -17,7 +17,7 @@ import { useTranscriptStore } from '../stores/transcriptStore';
 const BASE_URL = 'http://127.0.0.1:8080';
 
 // Tool name to friendly display name
-const getFriendlyToolName = (toolName: string): string => {
+const getFriendlyToolName = (toolName: string, toolArgs?: string): string => {
     const friendlyNames: Record<string, string> = {
         'bash': 'command line',
         'filesystem': 'file system',
@@ -29,6 +29,23 @@ const getFriendlyToolName = (toolName: string): string => {
         'search': 'web search',
         'fetch': 'fetching URL',
     };
+
+    // Special handling for delegate tool - extract agent name
+    if (toolName === 'delegate' && toolArgs) {
+        try {
+            const args = JSON.parse(toolArgs);
+            if (args.agent) {
+                // Extract friendly agent name from "foundation:explorer" -> "explorer"
+                const agentParts = args.agent.split(':');
+                const agentName = agentParts[agentParts.length - 1]
+                    .replace(/-/g, ' ')
+                    .replace(/_/g, ' ');
+                return agentName;
+            }
+        } catch {
+            // Fall through to default handling
+        }
+    }
 
     // Exact match
     if (friendlyNames[toolName]) {
@@ -121,7 +138,7 @@ export const useChatMessages = () => {
         // Show executing status - use toolCall.id to uniquely identify this specific call
         const statusMessage: Message = {
             sender: 'system',
-            text: `Using ${getFriendlyToolName(toolCall.name)}...`,
+            text: `Using ${getFriendlyToolName(toolCall.name, toolCall.arguments)}...`,
             timestamp: Date.now(),
             isSystem: true,
             type: 'tool_status',
@@ -151,8 +168,8 @@ export const useChatMessages = () => {
                     ? {
                         ...msg,
                         text: result.success
-                            ? `Completed ${getFriendlyToolName(toolCall.name)}`
-                            : `Error with ${getFriendlyToolName(toolCall.name)}`,
+                            ? `Completed ${getFriendlyToolName(toolCall.name, toolCall.arguments)}`
+                            : `Error with ${getFriendlyToolName(toolCall.name, toolCall.arguments)}`,
                         toolStatus: result.success ? 'completed' : 'error',
                         isError: !result.success
                     }
@@ -187,7 +204,7 @@ export const useChatMessages = () => {
                 // Response in progress - queue this for announcement after response.done
                 console.log(`[ChatMessages] Queueing ${toolCall.name} result - model busy speaking`);
                 pendingToolAnnouncementsRef.current.push({ 
-                    toolName: getFriendlyToolName(toolCall.name), 
+                    toolName: getFriendlyToolName(toolCall.name, toolCall.arguments), 
                     callId: toolCall.id 
                 });
             }
@@ -223,7 +240,7 @@ export const useChatMessages = () => {
                 responseInProgressRef.current = true;
             } else {
                 pendingToolAnnouncementsRef.current.push({ 
-                    toolName: getFriendlyToolName(toolCall.name), 
+                    toolName: getFriendlyToolName(toolCall.name, toolCall.arguments), 
                     callId: toolCall.id 
                 });
             }
