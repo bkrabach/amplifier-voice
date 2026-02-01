@@ -138,7 +138,7 @@ export const useChatMessages = () => {
         // Show executing status - use toolCall.id to uniquely identify this specific call
         const statusMessage: Message = {
             sender: 'system',
-            text: `Using ${getFriendlyToolName(toolCall.name, toolCall.arguments)}...`,
+            text: `Delegating to ${getFriendlyToolName(toolCall.name, toolCall.arguments)}...`,
             timestamp: Date.now(),
             isSystem: true,
             type: 'tool_status',
