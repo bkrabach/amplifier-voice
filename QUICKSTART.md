@@ -7,7 +7,7 @@ Get up and running with the voice assistant in 5 minutes.
 - Python 3.11+
 - Node.js 18+ (for client)
 - OpenAI API key with Realtime API access
-- Amplifier installed: `uv tool install git+https://github.com/microsoft/amplifier`
+- Anthropic API key (for agent delegation)
 
 ## Setup
 
@@ -18,10 +18,11 @@ Create `.env` in `voice-server/`:
 ```bash
 # Required
 OPENAI_API_KEY=sk-proj-...
+ANTHROPIC_API_KEY=sk-ant-...
 
 # Optional (defaults shown)
 VOICE_MODEL=gpt-realtime
-VOICE=alloy
+VOICE=ash
 MAX_TURNS=10
 ```
 
@@ -56,9 +57,10 @@ python -m voice_server
 You should see:
 ```
 INFO: Initializing Amplifier bridge...
-INFO: Amplifier bridge initialized with 13 tools
+INFO: Adding tool-delegate module to bundle
+INFO: Amplifier bridge initialized with 1 tool (delegate)
 INFO: Service lifespan started
-INFO: Uvicorn running on http://0.0.0.0:8000
+INFO: Uvicorn running on http://0.0.0.0:8080
 ```
 
 ### Start Frontend (Terminal 2)
@@ -96,22 +98,25 @@ Opens browser at `http://localhost:5173`
 - "Run 'ls -la' in the current directory"
 - "What's my current git status?"
 
-**Agent delegation:**
-- "Use the explorer agent to analyze the project structure"
-- "Spawn a task agent to research OpenAI's latest models"
+**Agent delegation (the main way to get things done):**
+- "Explore my current directory" → Delegates to foundation:explorer
+- "Research the latest Anthropic best practices" → Delegates to foundation:web-research
+- "Design a caching system for my app" → Delegates to foundation:zen-architect
+- "Fix the bug in my authentication code" → Delegates to foundation:bug-hunter
 
 ## Architecture
 
 ```
 Browser ─WebRTC─▶ FastAPI ─REST─▶ OpenAI Realtime API (voice I/O)
                      │
-                     └────▶ Amplifier (tools via programmatic API)
+                     └────▶ Amplifier (delegate tool → specialist agents)
 ```
 
 **Key points:**
-- OpenAI handles **all voice I/O** (speech recognition + synthesis)
-- Amplifier provides **tools** (file ops, bash, web, agents, etc.)
-- Backend bridges the two via programmatic API (no CLI subprocess)
+- OpenAI Realtime handles **voice I/O** (speech recognition + synthesis)
+- Voice model has ONE tool: `delegate` - sends work to specialist agents
+- Agents (explorer, architect, builder, etc.) run via Anthropic Claude
+- Backend bridges OpenAI voice + Amplifier agents via programmatic API
 
 ## Troubleshooting
 
@@ -124,12 +129,12 @@ pip list | grep amplifier
 
 Should see `amplifier-foundation` installed.
 
-### "No providers mounted"
+### "ANTHROPIC_API_KEY not set"
 
-Amplifier needs provider configuration. The voice server uses `amplifier-dev` bundle which should auto-configure, but if issues persist:
+The delegate tool spawns agents that run on Anthropic Claude. Set the API key:
 
 ```bash
-amplifier provider install anthropic -q
+export ANTHROPIC_API_KEY=sk-ant-...
 ```
 
 ### "WebRTC connection failed"
@@ -170,15 +175,16 @@ cd voice-client
 
 ### Add New Tools
 
-Edit `voice_server/config.py` to configure which Amplifier bundle to use:
+The voice assistant uses the `exp-amplifier-dev` bundle by default, which includes the
+`delegate` tool for agent orchestration. The bundle is configured in `voice_server/config.py`.
 
-```python
-class AmplifierSettings(BaseSettings):
-    bundle: str = "amplifier-dev"  # Change to custom bundle
-    cwd: str = str(Path.cwd())
-```
-
-The bridge will automatically discover and expose all tools from the bundle.
+Available agents for delegation:
+- `foundation:explorer` - Explore codebases, find files
+- `foundation:zen-architect` - Design systems, review architecture
+- `foundation:modular-builder` - Write code, implement features
+- `foundation:bug-hunter` - Debug issues, fix errors
+- `foundation:git-ops` - Git commits, PRs, branch management
+- `foundation:web-research` - Search the web, gather information
 
 ### Custom Instructions
 

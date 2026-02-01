@@ -4,7 +4,7 @@ import { useWebRTC, WebRTCHealthCallbacks } from './useWebRTC';
 import { useChatMessages } from './useChatMessages';
 import { useConnectionHealth, ReconnectionConfig } from './useConnectionHealth';
 import { VoiceChatEvent } from '../models/VoiceChatEvent';
-import { useTranscriptStore } from '../stores/transcriptStore';
+import { useTranscriptStore, SessionEndReason } from '../stores/transcriptStore';
 import { DisconnectReason } from '../lib/connectionHealth';
 
 export const useVoiceChat = () => {
@@ -27,6 +27,7 @@ export const useVoiceChat = () => {
         createSession, 
         resumeSession, 
         syncToServer,
+        endSession,
         clearSession 
     } = useTranscriptStore();
 
@@ -74,6 +75,16 @@ export const useVoiceChat = () => {
                 reason === 'data_channel_closed' ? 'data_channel_closed' :
                 reason === 'ice_failed' ? 'network_error' : 'unknown';
             health.endSession(healthReason);
+            
+            // Map WebRTC disconnect reason to session end reason for tracking
+            const sessionEndReason: SessionEndReason = 
+                reason === 'user_initiated' ? 'user_ended' :
+                reason === 'ice_failed' ? 'network_error' :
+                reason === 'connection_failed' ? 'network_error' :
+                reason === 'data_channel_closed' ? 'network_error' : 'error';
+            
+            // Record disconnect on server for analytics
+            endSession(sessionEndReason, reason !== 'user_initiated' ? `WebRTC: ${reason}` : undefined);
         },
     }), [health]);
 
@@ -144,6 +155,8 @@ export const useVoiceChat = () => {
     const disconnectVoiceChat = async () => {
         // Sync any pending transcript entries before disconnecting
         await syncToServer();
+        // End session with user_ended reason (explicit disconnect)
+        await endSession('user_ended');
         disconnect();
     };
 

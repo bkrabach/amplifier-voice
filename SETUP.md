@@ -10,8 +10,8 @@ cd voice-server
 # Create .env file
 cat > .env << 'EOF'
 OPENAI_API_KEY=your_openai_api_key_here
-AMPLIFIER_BUNDLE=foundation
-AMPLIFIER_AUTO_APPROVE=true
+AMPLIFIER_BUNDLE=exp-amplifier-dev
+ANTHROPIC_API_KEY=your_anthropic_api_key_here
 AMPLIFIER_CWD=/path/to/your/working/directory
 EOF
 
@@ -54,12 +54,12 @@ Click "Start Voice Chat" to begin!
 ### Amplifier Integration
 
 The server uses **AmplifierBridge** to:
-- Load Amplifier bundles (default: `foundation`)
-- Discover available tools (`tool-filesystem`, `tool-bash`, `tool-web`)
-- Execute tools with timeout and error handling
-- Convert tool definitions to OpenAI function calling format
+- Load the `exp-amplifier-dev` bundle with the `delegate` tool
+- Spawn specialist agents (explorer, architect, builder, etc.) via Anthropic Claude
+- Execute delegated tasks with timeout and error handling
+- Convert the delegate tool definition to OpenAI function calling format
 
-Tools are automatically injected into the OpenAI Realtime session configuration.
+The voice model has ONE tool (`delegate`) which sends work to specialist AI agents.
 
 ---
 
@@ -72,7 +72,7 @@ Tools are automatically injected into the OpenAI Realtime session configuration.
 OPENAI_API_KEY=sk-...
 
 # Amplifier settings
-AMPLIFIER_BUNDLE=foundation              # Bundle to use
+AMPLIFIER_BUNDLE=exp-amplifier-dev       # Bundle with delegate tool
 AMPLIFIER_AUTO_APPROVE=true              # Auto-approve tool execution (recommended for voice)
 AMPLIFIER_CWD=/path/to/working/dir       # Working directory for tools
 AMPLIFIER_TOOL_TIMEOUT=60.0              # Tool execution timeout (seconds)

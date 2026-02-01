@@ -119,6 +119,108 @@ class TranscriptRepository:
                 break
         self._write_json(self._sessions_index, index)
 
+    def end_session(
+        self,
+        session_id: str,
+        reason: str,
+        error_details: Optional[str] = None,
+    ) -> Optional[VoiceSession]:
+        """
+        End a session and record disconnect information.
+
+        Args:
+            session_id: The session to end
+            reason: Why the session ended. One of:
+                - "user_ended": User explicitly ended the session
+                - "idle_timeout": Session timed out due to inactivity (15 min)
+                - "session_limit": OpenAI 60-minute session limit reached
+                - "network_error": WebRTC/WebSocket connection lost
+                - "error": Other error occurred
+            error_details: Optional additional error information
+
+        Returns:
+            Updated VoiceSession or None if not found
+        """
+        session = self.get_session(session_id)
+        if not session:
+            logger.warning(f"Cannot end session - not found: {session_id}")
+            return None
+
+        # Calculate duration
+        try:
+            created = datetime.fromisoformat(session.created_at)
+            ended = datetime.utcnow()
+            duration = int((ended - created).total_seconds())
+        except Exception:
+            duration = None
+
+        # Update session with end info
+        session.status = "completed" if reason == "user_ended" else "disconnected"
+        session.ended_at = datetime.utcnow().isoformat()
+        session.end_reason = reason
+        session.duration_seconds = duration
+        session.error_details = error_details
+
+        self.update_session(session)
+
+        # Log for analytics
+        logger.info(
+            f"Session ended: {session_id} | reason={reason} | duration={duration}s | "
+            f"messages={session.message_count} | tool_calls={session.tool_call_count}"
+        )
+
+        if error_details:
+            logger.warning(f"Session {session_id} error details: {error_details}")
+
+        return session
+
+    def get_session_stats(self) -> dict:
+        """
+        Get aggregate statistics about sessions for debugging/analytics.
+
+        Returns dict with counts by end_reason, average duration, etc.
+        """
+        sessions = self.list_sessions(limit=100)
+
+        stats = {
+            "total_sessions": len(sessions),
+            "by_status": {},
+            "by_end_reason": {},
+            "avg_duration_seconds": 0,
+            "avg_messages": 0,
+            "avg_tool_calls": 0,
+        }
+
+        total_duration = 0
+        total_messages = 0
+        total_tool_calls = 0
+        duration_count = 0
+
+        for session in sessions:
+            # Count by status
+            status = session.status or "unknown"
+            stats["by_status"][status] = stats["by_status"].get(status, 0) + 1
+
+            # Count by end reason
+            reason = session.end_reason or "unknown"
+            stats["by_end_reason"][reason] = stats["by_end_reason"].get(reason, 0) + 1
+
+            # Sum for averages
+            if session.duration_seconds:
+                total_duration += session.duration_seconds
+                duration_count += 1
+            total_messages += session.message_count
+            total_tool_calls += session.tool_call_count
+
+        # Calculate averages
+        if duration_count > 0:
+            stats["avg_duration_seconds"] = total_duration // duration_count
+        if len(sessions) > 0:
+            stats["avg_messages"] = total_messages // len(sessions)
+            stats["avg_tool_calls"] = total_tool_calls // len(sessions)
+
+        return stats
+
     def list_sessions(
         self, status: Optional[str] = None, limit: int = 20
     ) -> list[VoiceSession]:

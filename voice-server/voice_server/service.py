@@ -238,6 +238,54 @@ def service_init(app: FastAPI, register_lifespan_handler: Callable):
 
         return {"synced": synced, "session_id": session_id}
 
+    @app.post("/sessions/{session_id}/end")
+    async def end_session(session_id: str, request: Request) -> Dict[str, Any]:
+        """
+        End a session and record disconnect information.
+
+        Body should include:
+        - reason: "user_ended" | "idle_timeout" | "session_limit" | "network_error" | "error"
+        - error_details: Optional string with additional error info
+        """
+        if not _transcript_repo:
+            raise HTTPException(
+                status_code=503, detail="Transcript repository not initialized"
+            )
+
+        try:
+            body = await request.json()
+            reason = body.get("reason", "user_ended")
+            error_details = body.get("error_details")
+        except Exception:
+            reason = "user_ended"
+            error_details = None
+
+        session = _transcript_repo.end_session(
+            session_id, reason=reason, error_details=error_details
+        )
+
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        return {
+            "session_id": session_id,
+            "status": session.status,
+            "end_reason": session.end_reason,
+            "duration_seconds": session.duration_seconds,
+        }
+
+    @app.get("/sessions/stats")
+    async def get_session_stats() -> Dict[str, Any]:
+        """
+        Get aggregate session statistics for debugging/analytics.
+
+        Returns counts by end_reason, average duration, etc.
+        """
+        if not _transcript_repo:
+            return {"error": "Transcript repository not initialized"}
+
+        return _transcript_repo.get_session_stats()
+
     @app.post("/sessions/{session_id}/resume")
     async def resume_session(session_id: str, request: Request) -> Dict[str, Any]:
         """

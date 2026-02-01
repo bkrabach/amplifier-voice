@@ -141,7 +141,7 @@ Browser Audio        OpenAI Realtime          Backend            Amplifier Tools
 # Server startup
 from amplifier_foundation.bundle import load_bundle
 
-bundle = await load_bundle("amplifier-dev")
+bundle = await load_bundle("exp-amplifier-dev")
 prepared = await bundle.prepare()
 session = await prepared.create_session(session_cwd=cwd)
 
@@ -160,14 +160,18 @@ result = await tool_mount.call(**arguments)
 - Direct Python API calls
 - All amplifier-dev tools available (~13+ tools)
 
-**Available Tools**:
-- `tool-filesystem` - Read, write, edit files
-- `tool-bash` - Execute shell commands
-- `tool-web` - Web search and fetch
-- `tool-search` - Grep/glob code search
-- `tool-task` - Spawn specialist agents
-- `tool-todo` - Task tracking
-- Plus all hooks, context modules, etc.
+**Available Tool**:
+- `tool-delegate` - Spawn specialist agents (the ONLY tool exposed to voice model)
+
+**Available Agents** (via delegate tool):
+- `foundation:explorer` - Explore codebases, find files, understand structure
+- `foundation:zen-architect` - Design systems, review architecture
+- `foundation:modular-builder` - Write code, implement features
+- `foundation:bug-hunter` - Debug issues, fix errors
+- `foundation:git-ops` - Git commits, PRs, branch management
+- `foundation:web-research` - Search the web, fetch information
+
+Agents run on Anthropic Claude and have access to all Amplifier tools internally.
 
 ### FastAPI Backend
 

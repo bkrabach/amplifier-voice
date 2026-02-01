@@ -28,12 +28,19 @@ export interface VoiceSession {
   created_at: string;
   updated_at: string;
   title?: string;
-  status: 'active' | 'completed';
+  status: 'active' | 'completed' | 'disconnected' | 'error';
   message_count: number;
   tool_call_count: number;
   first_message?: string;
   last_message?: string;
+  // Disconnect tracking
+  ended_at?: string;
+  end_reason?: 'user_ended' | 'idle_timeout' | 'session_limit' | 'network_error' | 'error';
+  duration_seconds?: number;
+  error_details?: string;
 }
+
+export type SessionEndReason = 'user_ended' | 'idle_timeout' | 'session_limit' | 'network_error' | 'error';
 
 interface TranscriptState {
   // Current session
@@ -60,6 +67,7 @@ interface TranscriptState {
     transcript: Array<{entry_type: string; text?: string; tool_name?: string; timestamp?: string}>;
     realtime: { client_secret: { value: string } };
   }>;
+  endSession: (reason: SessionEndReason, errorDetails?: string) => Promise<void>;
   clearSession: () => void;
 }
 
@@ -250,6 +258,40 @@ export const useTranscriptStore = create<TranscriptState>()((set, get) => ({
       console.error('[TranscriptStore] Failed to resume session:', err);
       set({ isLoading: false });
       throw err;
+    }
+  },
+
+  endSession: async (reason: SessionEndReason, errorDetails?: string) => {
+    const { sessionId, pendingSync } = get();
+    if (!sessionId) {
+      console.warn('[TranscriptStore] No active session to end');
+      return;
+    }
+
+    // Sync any pending entries first
+    if (pendingSync.length > 0) {
+      await get().syncToServer();
+    }
+
+    try {
+      const response = await fetch(`${API_BASE}/sessions/${sessionId}/end`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason, error_details: errorDetails }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        console.log('[TranscriptStore] Session ended:', {
+          sessionId,
+          reason,
+          duration: data.duration_seconds,
+        });
+      } else {
+        console.warn('[TranscriptStore] Failed to end session on server:', response.status);
+      }
+    } catch (err) {
+      console.error('[TranscriptStore] Error ending session:', err);
     }
   },
 

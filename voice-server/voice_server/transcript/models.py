@@ -45,7 +45,7 @@ class VoiceSession:
 
     # Session metadata
     title: Optional[str] = None
-    status: str = "active"  # "active" | "completed"
+    status: str = "active"  # "active" | "completed" | "disconnected" | "error"
 
     # Stats
     message_count: int = 0
@@ -54,6 +54,14 @@ class VoiceSession:
     # Entries stored separately, but we can include summary
     first_message: Optional[str] = None
     last_message: Optional[str] = None
+
+    # Disconnect tracking
+    ended_at: Optional[str] = None
+    end_reason: Optional[str] = (
+        None  # "user_ended" | "idle_timeout" | "session_limit" | "error" | "network_error"
+    )
+    duration_seconds: Optional[int] = None
+    error_details: Optional[str] = None
 
     def to_dict(self) -> dict:
         """Convert to JSON-safe dict."""

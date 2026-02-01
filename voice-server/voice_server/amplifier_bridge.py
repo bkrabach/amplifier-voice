@@ -101,7 +101,7 @@ class AmplifierBridge:
             logger.debug(f"Loading bundle: {self._bundle_name}")
             bundle = await load_bundle(self._bundle_name)
 
-            # Add Anthropic provider for task tool delegation (if API key available)
+            # Add Anthropic provider for delegate tool delegation (if API key available)
             anthropic_api_key = os.environ.get("ANTHROPIC_API_KEY")
             if anthropic_api_key:
                 logger.info(
@@ -124,7 +124,39 @@ class AmplifierBridge:
                 )
             else:
                 logger.warning(
-                    "ANTHROPIC_API_KEY not set - task tool delegation will not work"
+                    "ANTHROPIC_API_KEY not set - delegate tool delegation will not work"
+                )
+
+            # CRITICAL: Explicitly add tool-delegate module
+            # The agents behavior uses a relative path that doesn't work when loading from GitHub
+            # We add it here with the full git URL to ensure it's available
+            if not bundle.tools:
+                bundle.tools = []
+
+            # Check if delegate tool is already in the bundle
+            has_delegate = any(
+                t.get("module") == "tool-delegate" for t in bundle.tools if isinstance(t, dict)
+            )
+            if not has_delegate:
+                logger.info("Adding tool-delegate module to bundle")
+                bundle.tools.append(
+                    {
+                        "module": "tool-delegate",
+                        "source": "git+https://github.com/microsoft/amplifier-foundation@main#subdirectory=modules/tool-delegate",
+                        "config": {
+                            "features": {
+                                "self_delegation": {"enabled": True},
+                                "session_resume": {"enabled": True},
+                                "context_inheritance": {"enabled": True, "max_turns": 10},
+                                "provider_selection": {"enabled": True},
+                            },
+                            "settings": {
+                                "exclude_tools": ["delegate"],  # Spawned agents can't further delegate
+                                "exclude_hooks": [],
+                                "timeout": 300,
+                            },
+                        },
+                    }
                 )
 
             # Prepare (resolve modules)
@@ -162,9 +194,9 @@ class AmplifierBridge:
             raise
 
     def _register_spawn_capability(self) -> None:
-        """Register session.spawn capability for task tool agent delegation.
+        """Register session.spawn and session.resume capabilities for delegate tool.
 
-        This enables the task tool to spawn sub-sessions for agents.
+        This enables the delegate tool to spawn and resume sub-sessions for agents.
         Implementation based on amplifier-foundation/examples/07_full_workflow.py
         """
         from amplifier_foundation import Bundle
@@ -180,11 +212,12 @@ class AmplifierBridge:
             orchestrator_config: Optional[Dict[str, Any]] = None,
             provider_preferences: Optional[List[Any]] = None,
             parent_messages: Optional[List[Dict[str, Any]]] = None,
+            self_delegation_depth: int = 0,  # NEW: for delegate tool self-delegation
         ) -> Dict[str, Any]:
             """Spawn sub-session for agent delegation.
 
             Args:
-                agent_name: Name of the agent to spawn.
+                agent_name: Name of the agent to spawn (or "self" for self-delegation).
                 instruction: Task instruction for the agent.
                 parent_session: Parent session for lineage tracking.
                 agent_configs: Agent configuration overrides.
@@ -194,6 +227,7 @@ class AmplifierBridge:
                 orchestrator_config: Optional orchestrator config for rate limiting, etc.
                 provider_preferences: Ordered list of provider/model preferences.
                 parent_messages: Optional messages from parent to inject into child context.
+                self_delegation_depth: Current depth of self-delegation chain.
 
             Returns:
                 Dict with result from spawned agent.
@@ -201,6 +235,22 @@ class AmplifierBridge:
             logger.info(
                 f"Spawning agent: {agent_name} with instruction: {instruction[:100]}..."
             )
+
+            # Handle "self" delegation - use parent's bundle
+            if agent_name == "self":
+                logger.info(f"Self-delegation at depth {self_delegation_depth}")
+                # For self-delegation, we use the parent's prepared bundle
+                # The child will have the same capabilities as the parent
+                return await self._prepared.spawn(
+                    child_bundle=None,  # Use parent's bundle
+                    instruction=instruction,
+                    session_id=sub_session_id,
+                    parent_session=parent_session,
+                    session_cwd=self._cwd,
+                    orchestrator_config=orchestrator_config,
+                    provider_preferences=provider_preferences,
+                    parent_messages=parent_messages,
+                )
 
             # Resolve agent name to configuration
             if agent_name in agent_configs:
@@ -265,9 +315,33 @@ class AmplifierBridge:
                 parent_messages=parent_messages,
             )
 
-        # Register the capability with the coordinator
+        async def resume_capability(
+            sub_session_id: str,
+            instruction: str,
+        ) -> Dict[str, Any]:
+            """Resume an existing agent sub-session.
+
+            Args:
+                sub_session_id: Full session ID from previous delegate call.
+                instruction: Follow-up instruction for the agent.
+
+            Returns:
+                Dict with result from resumed agent.
+            """
+            logger.info(f"Resuming session: {sub_session_id}")
+
+            # Use PreparedBundle.resume() to handle session resumption
+            return await self._prepared.resume(
+                session_id=sub_session_id,
+                instruction=instruction,
+            )
+
+        # Register both capabilities with the coordinator
         self._coordinator.register_capability("session.spawn", spawn_capability)
-        logger.info("Registered session.spawn capability for task tool")
+        self._coordinator.register_capability("session.resume", resume_capability)
+        logger.info(
+            "Registered session.spawn and session.resume capabilities for delegate tool"
+        )
 
     async def _discover_tools(self):
         """Enumerate tools from the coordinator using public API."""
@@ -314,8 +388,9 @@ class AmplifierBridge:
                 continue
 
     # Tools to expose to the realtime model (others available to agents internally)
-    # Only task tool - forces ALL work to be delegated to agents
-    REALTIME_TOOLS = {"task"}
+    # Only delegate tool - forces ALL work to be delegated to agents
+    # Using NEW delegate tool (not legacy task tool) for enhanced context control
+    REALTIME_TOOLS = {"delegate"}
 
     def get_tools_for_openai(self) -> List[Dict[str, Any]]:
         """

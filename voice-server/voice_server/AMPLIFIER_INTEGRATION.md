@@ -49,8 +49,9 @@ The voice assistant uses a clean hybrid architecture:
 ### Key Components
 
 1. **OpenAI Realtime API** - Handles voice I/O (Speech-to-Text and Text-to-Speech) via WebRTC
-2. **Amplifier Bridge** - Manages tool execution and provides rich capabilities
-3. **Voice Protocol Adapters** - Adapts Amplifier events for voice interactions
+2. **Amplifier Bridge** - Manages the delegate tool and agent spawning
+3. **Delegate Tool** - Routes work to specialist AI agents running on Anthropic Claude
+4. **Specialist Agents** - explorer, architect, builder, bug-hunter, git-ops, web-research
 
 ## Configuration
 
@@ -61,7 +62,8 @@ The voice assistant uses a clean hybrid architecture:
 OPENAI_API_KEY=your_api_key
 
 # Amplifier Configuration (optional)
-AMPLIFIER_BUNDLE=foundation       # Bundle to use
+AMPLIFIER_BUNDLE=exp-amplifier-dev  # Bundle with delegate tool
+ANTHROPIC_API_KEY=sk-ant-...        # Required for agent delegation
 AMPLIFIER_CWD=/path/to/working    # Working directory for tools
 AMPLIFIER_AUTO_APPROVE=true       # Auto-approve tools (recommended for voice)
 ```
@@ -77,11 +79,11 @@ class RealtimeSettings:
     session_config: dict = {...}
 
 class AmplifierSettings:
-    bundle: str = "foundation"
+    bundle: str = "exp-amplifier-dev"  # Bundle with delegate tool
     cwd: str = os.getcwd()
     auto_approve: bool = True
-    tool_timeout: float = 60.0
-    tools: List[str] = ["tool-filesystem", "tool-bash", "tool-web"]
+    tool_timeout: float = 300.0  # Agent tasks can take longer
+    # Only delegate tool exposed to voice model - agents have full tool access
 ```
 
 ## API Endpoints
