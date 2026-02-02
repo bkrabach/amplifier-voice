@@ -323,6 +323,13 @@ export const useChatMessages = () => {
                             ? event.audio_end_ms - event.audio_start_ms 
                             : undefined,
                     });
+                    
+                    // With create_response: false, we manually trigger response
+                    // The MODEL decides (via instructions) how much to say
+                    if (dataChannelRef.current?.readyState === 'open') {
+                        console.log('[ChatMessages] Triggering response.create - model decides how to respond');
+                        dataChannelRef.current.send(JSON.stringify({ type: 'response.create' }));
+                    }
                 }
                 break;
 

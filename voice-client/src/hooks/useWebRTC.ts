@@ -128,9 +128,10 @@ export const useWebRTC = () => {
                 dataChannel.send(JSON.stringify(sessionUpdate));
                 console.log('Sent initial session.update for voice configuration:', JSON.stringify(sessionUpdate));
                 
-                // Now upgrade to semantic_vad for smarter turn detection
-                // This allows the model to understand when users are semantically done speaking
-                // vs just pausing or having a side conversation
+                // Upgrade to semantic_vad with create_response: false
+                // This gives US control over when to trigger responses
+                // We call response.create manually after transcription, tool results, etc.
+                // The MODEL then decides (via instructions) how much to say
                 const semanticVadUpdate = {
                     type: 'session.update',
                     session: {
@@ -140,7 +141,7 @@ export const useWebRTC = () => {
                                 turn_detection: {
                                     type: 'semantic_vad',
                                     eagerness: 'low',  // Patient - waits longer for user to finish
-                                    create_response: true,  // Still auto-respond, but model can choose silence
+                                    create_response: false,  // WE control when to trigger responses
                                     interrupt_response: true  // Allow user to interrupt
                                 }
                             }
