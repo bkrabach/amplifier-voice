@@ -75,10 +75,6 @@ export const useChatMessages = () => {
     const responseInProgressRef = useRef<boolean>(false);
     const pendingToolAnnouncementsRef = useRef<Array<{ toolName: string; callId: string }>>([]);
     
-    // Quiet mode - when user asks assistant to stay silent
-    // With create_response: false, WE control when to trigger responses
-    const quietModeRef = useRef<boolean>(false);
-    
     // Transcript capture
     const { addEntry: addTranscriptEntry } = useTranscriptStore();
 
@@ -312,8 +308,6 @@ export const useChatMessages = () => {
             case VoiceChatEventType.TRANSCRIPTION_COMPLETED:
                 if (activeUserMessageRef.current && event.transcript) {
                     const userText = event.transcript.trim();
-                    const userTextLower = userText.toLowerCase();
-                    
                     setMessages(prev => prev.map(msg =>
                         msg.isStreaming && msg.sender === 'user'
                             ? { ...msg, text: userText, isStreaming: false }
@@ -329,55 +323,6 @@ export const useChatMessages = () => {
                             ? event.audio_end_ms - event.audio_start_ms 
                             : undefined,
                     });
-                    
-                    // === INTENT DETECTION FOR MANUAL RESPONSE TRIGGERING ===
-                    // With create_response: false, WE decide when to respond
-                    
-                    // Patterns that activate quiet mode (assistant should stay silent)
-                    const quietPatterns = [
-                        /stay quiet/i, /be quiet/i, /shut up/i, /stop talking/i,
-                        /let me.*(?:finish|talk|have.*word)/i, /i'm done/i,
-                        /don't (?:respond|reply|say anything)/i, /no response/i,
-                        /give me.*(?:last word|silence)/i, /quiet mode/i,
-                        /talking to (?:myself|someone else|each other)/i
-                    ];
-                    
-                    // Patterns that deactivate quiet mode (re-engage assistant)
-                    const engagePatterns = [
-                        /^(?:hey |hi |ok |okay )?amplifier/i, /you can (?:talk|respond|speak)/i,
-                        /amplifier[,.]? (?:can you|what|how|help|tell)/i,
-                        /what do you think/i, /your (?:turn|thoughts)/i,
-                        /respond now/i, /talk to me/i, /come back/i
-                    ];
-                    
-                    // Check for quiet mode activation
-                    if (quietPatterns.some(p => p.test(userTextLower))) {
-                        console.log('[ChatMessages] Quiet mode ACTIVATED - user requested silence');
-                        quietModeRef.current = true;
-                        // Still respond to acknowledge the request
-                        if (dataChannelRef.current?.readyState === 'open') {
-                            dataChannelRef.current.send(JSON.stringify({ type: 'response.create' }));
-                        }
-                        break;
-                    }
-                    
-                    // Check for re-engagement
-                    if (engagePatterns.some(p => p.test(userTextLower))) {
-                        console.log('[ChatMessages] Quiet mode DEACTIVATED - user re-engaged');
-                        quietModeRef.current = false;
-                    }
-                    
-                    // If in quiet mode, DON'T trigger a response
-                    if (quietModeRef.current) {
-                        console.log('[ChatMessages] In quiet mode - NOT triggering response');
-                        break;
-                    }
-                    
-                    // Normal mode - trigger response
-                    console.log('[ChatMessages] Triggering response.create after transcription');
-                    if (dataChannelRef.current?.readyState === 'open') {
-                        dataChannelRef.current.send(JSON.stringify({ type: 'response.create' }));
-                    }
                 }
                 break;
 
