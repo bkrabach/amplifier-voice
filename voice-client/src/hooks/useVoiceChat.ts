@@ -96,10 +96,11 @@ export const useVoiceChat = () => {
             },
             onRespondNow: () => {
                 console.log('[VoiceChat] Voice keyword: respond now');
+                // Check state BEFORE triggerResponse (which may resume internally)
+                const wasPaused = micControl.micState === 'paused';
                 micControl.triggerResponse();
-                // Also resume replies when responding
-                if (micControl.micState === 'paused') {
-                    micControl.resumeReplies();
+                // Show indicator if we were paused (triggerResponse resumes automatically)
+                if (wasPaused) {
                     addSystemMessage('Replies resumed', '▶️');
                 }
             },
@@ -211,17 +212,22 @@ export const useVoiceChat = () => {
         const isResume = toolName === 'resume_replies' || toolName === 'exit_listen_mode';
 
         // Execute the appropriate action (only show indicator if state actually changes)
+        // Track if state changed - if not, voice keyword already handled it
+        let stateChanged = false;
+        
         if (isPause) {
             const wasNotPaused = micControl.micState !== 'paused';
             micControl.pauseReplies();
             if (wasNotPaused) {
                 addSystemMessage('Replies paused - still listening', '⏸️');
+                stateChanged = true;
             }
         } else if (isResume) {
             const wasPaused = micControl.micState === 'paused';
             micControl.resumeReplies();
             if (wasPaused) {
                 addSystemMessage('Replies resumed', '▶️');
+                stateChanged = true;
             }
         } else {
             console.warn(`[VoiceChat] Unknown client-side tool: ${toolName}`);
@@ -246,12 +252,17 @@ export const useVoiceChat = () => {
             dataChannel.send(JSON.stringify(toolResult));
             console.log(`[VoiceChat] Sent tool result for ${toolName}`);
 
-            // Trigger a response so the model can acknowledge
-            const responseCreate = {
-                type: 'response.create'
-            };
-            dataChannel.send(JSON.stringify(responseCreate));
-            console.log(`[VoiceChat] Triggered response for ${toolName} acknowledgment`);
+            // Only trigger response.create if state actually changed
+            // (if voice keyword already handled it, skip to avoid "already has active response" error)
+            if (stateChanged) {
+                const responseCreate = {
+                    type: 'response.create'
+                };
+                dataChannel.send(JSON.stringify(responseCreate));
+                console.log(`[VoiceChat] Triggered response for ${toolName} acknowledgment`);
+            } else {
+                console.log(`[VoiceChat] Skipping response.create - state already changed by keyword`);
+            }
         }
         
         return true; // Handled
