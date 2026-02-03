@@ -68,6 +68,9 @@ export const useVoiceChat = () => {
     // Track data channel for microphone control
     const dataChannelRef = useRef<RTCDataChannel | null>(null);
 
+    // Track pending tool acknowledgments - need to send response.create after response.done
+    const pendingToolAckRef = useRef<boolean>(false);
+
     // Helper to trigger a response via data channel (for voice keyword handlers)
     const triggerResponseViaDataChannel = useCallback(() => {
         const dc = dataChannelRef.current;
@@ -255,6 +258,11 @@ export const useVoiceChat = () => {
             };
             dataChannel.send(JSON.stringify(toolResult));
             console.log(`[VoiceChat] Sent tool result for ${toolName}`);
+
+            // Mark that we need to trigger a response after this response.done
+            // Can't send response.create now (active response), but need model to acknowledge
+            pendingToolAckRef.current = true;
+            console.log(`[VoiceChat] Marked pending tool ack for ${toolName}`);
         }
         
         return true; // Handled
@@ -296,6 +304,19 @@ export const useVoiceChat = () => {
                         // Skip - already handled via response.output_item.added
                         return;
                     }
+                }
+
+                // Check for response.done - if we have a pending tool ack, trigger response.create
+                if (event.type === 'response.done' && pendingToolAckRef.current) {
+                    pendingToolAckRef.current = false;
+                    console.log('[VoiceChat] Response done with pending tool ack - triggering response');
+                    // Small delay to ensure the response is fully complete
+                    setTimeout(() => {
+                        if (dataChannel.readyState === 'open') {
+                            dataChannel.send(JSON.stringify({ type: 'response.create' }));
+                            console.log('[VoiceChat] Triggered response for tool acknowledgment');
+                        }
+                    }, 50);
                 }
 
                 // Check for transcription events (for keyword detection)
