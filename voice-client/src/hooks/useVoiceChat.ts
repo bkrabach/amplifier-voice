@@ -210,13 +210,19 @@ export const useVoiceChat = () => {
         const isPause = toolName === 'pause_replies' || toolName === 'enter_listen_mode';
         const isResume = toolName === 'resume_replies' || toolName === 'exit_listen_mode';
 
-        // Execute the appropriate action
+        // Execute the appropriate action (only show indicator if state actually changes)
         if (isPause) {
+            const wasNotPaused = micControl.micState !== 'paused';
             micControl.pauseReplies();
-            addSystemMessage('Replies paused - still listening', '⏸️');
+            if (wasNotPaused) {
+                addSystemMessage('Replies paused - still listening', '⏸️');
+            }
         } else if (isResume) {
+            const wasPaused = micControl.micState === 'paused';
             micControl.resumeReplies();
-            addSystemMessage('Replies resumed', '▶️');
+            if (wasPaused) {
+                addSystemMessage('Replies resumed', '▶️');
+            }
         } else {
             console.warn(`[VoiceChat] Unknown client-side tool: ${toolName}`);
             return false;
