@@ -235,6 +235,10 @@ export const useVoiceChat = () => {
         }
 
         // Send tool result back to OpenAI so the model knows it succeeded
+        // Note: Do NOT send response.create here - the model is already in an active response
+        // (it called this tool as part of responding). Sending response.create would cause
+        // "conversation_already_has_active_response" error. The model will naturally continue
+        // after receiving the tool result.
         if (callId && dataChannel.readyState === 'open') {
             const resultMessage = isPause 
                 ? 'Replies paused. I am still listening and will transcribe what you say. Say "go ahead" or "respond now" when you want me to reply.'
@@ -251,18 +255,6 @@ export const useVoiceChat = () => {
             };
             dataChannel.send(JSON.stringify(toolResult));
             console.log(`[VoiceChat] Sent tool result for ${toolName}`);
-
-            // Only trigger response.create if state actually changed
-            // (if voice keyword already handled it, skip to avoid "already has active response" error)
-            if (stateChanged) {
-                const responseCreate = {
-                    type: 'response.create'
-                };
-                dataChannel.send(JSON.stringify(responseCreate));
-                console.log(`[VoiceChat] Triggered response for ${toolName} acknowledgment`);
-            } else {
-                console.log(`[VoiceChat] Skipping response.create - state already changed by keyword`);
-            }
         }
         
         return true; // Handled
