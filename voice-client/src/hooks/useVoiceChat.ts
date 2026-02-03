@@ -39,7 +39,7 @@ export const useVoiceChat = () => {
 
     // Chat messages with auto-respond check based on mic state
     // Uses micControl.shouldAutoRespond which reads from ref to avoid stale closures
-    const { messages, handleEvent, clearMessages, loadPreviousMessages } = useChatMessages({
+    const { messages, handleEvent, clearMessages, loadPreviousMessages, addSystemMessage } = useChatMessages({
         shouldAutoRespond: micControl.shouldAutoRespond,
     });
     
@@ -179,7 +179,7 @@ export const useVoiceChat = () => {
     // Handle voice control tool calls (client-side execution)
     const handleVoiceControlTool = useCallback((
         toolName: string,
-        _callId: string,
+        callId: string,
         dataChannel: RTCDataChannel
     ): boolean => {
         if (!CLIENT_SIDE_TOOLS.has(toolName)) {
@@ -188,27 +188,53 @@ export const useVoiceChat = () => {
 
         console.log(`[VoiceChat] Handling client-side tool: ${toolName}`);
 
-        // Execute the appropriate action (handle both old and new names)
-        switch (toolName) {
-            case 'pause_replies':
-            case 'enter_listen_mode':  // Old name alias
-                micControl.pauseReplies();
-                break;
-            case 'resume_replies':
-            case 'exit_listen_mode':   // Old name alias
-                micControl.resumeReplies();
-                break;
-            default:
-                console.warn(`[VoiceChat] Unknown client-side tool: ${toolName}`);
-                return false;
+        // Normalize tool name for consistent handling
+        const isPause = toolName === 'pause_replies' || toolName === 'enter_listen_mode';
+        const isResume = toolName === 'resume_replies' || toolName === 'exit_listen_mode';
+
+        // Execute the appropriate action
+        if (isPause) {
+            micControl.pauseReplies();
+            addSystemMessage('Replies paused - still listening', '⏸️');
+        } else if (isResume) {
+            micControl.resumeReplies();
+            addSystemMessage('Replies resumed', '▶️');
+        } else {
+            console.warn(`[VoiceChat] Unknown client-side tool: ${toolName}`);
+            return false;
         }
 
-        // Send tool result back to OpenAI (client-side execution succeeded)
-        // Note: We need to send a response.create after tool completion for the model to continue
-        // But for these control tools, the model handles the response naturally
+        // Send tool result back to OpenAI so the model knows it succeeded
+        if (callId && dataChannel.readyState === 'open') {
+            const resultMessage = isPause 
+                ? 'Replies paused. I am still listening and will transcribe what you say. Say "go ahead" or "respond now" when you want me to reply.'
+                : 'Replies resumed. I will now respond to your speech normally.';
+            
+            // Send the function call output
+            const toolResult = {
+                type: 'conversation.item.create',
+                item: {
+                    type: 'function_call_output',
+                    call_id: callId,
+                    output: JSON.stringify({ success: true, message: resultMessage })
+                }
+            };
+            dataChannel.send(JSON.stringify(toolResult));
+            console.log(`[VoiceChat] Sent tool result for ${toolName}`);
+
+            // Trigger a response so the model can acknowledge
+            const responseCreate = {
+                type: 'response.create',
+                response: {
+                    modalities: ['text', 'audio'],
+                }
+            };
+            dataChannel.send(JSON.stringify(responseCreate));
+            console.log(`[VoiceChat] Triggered response for ${toolName} acknowledgment`);
+        }
         
         return true; // Handled
-    }, [micControl]);
+    }, [micControl, addSystemMessage]);
 
     // Process transcription events for voice keywords
     const processTranscriptionForKeywords = useCallback((text: string) => {

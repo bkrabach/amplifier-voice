@@ -574,10 +574,21 @@ export const useChatMessages = (options: UseChatMessagesOptions = {}) => {
         activeToolCallRef.current = null;
     }, []);
 
+    // Add a system message (for visual indicators like pause/resume)
+    const addSystemMessage = useCallback((text: string, icon?: string) => {
+        const message: Message = {
+            sender: 'system',
+            text: icon ? `${icon} ${text}` : text,
+            timestamp: new Date().toISOString(),
+        };
+        setMessages(prev => [...prev, message]);
+    }, []);
+
     return {
         messages,
         handleEvent,
         clearMessages,
-        loadPreviousMessages
+        loadPreviousMessages,
+        addSystemMessage
     };
 };
