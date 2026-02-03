@@ -225,6 +225,8 @@ export const useVoiceChat = () => {
 
                 // Check for function call events (voice control tools)
                 // Handle client-side and DON'T pass to handleEvent (which would try to execute via Amplifier)
+                
+                // Intercept response.output_item.added/done for function calls
                 if (event.type === 'response.output_item.added' || event.type === 'response.output_item.done') {
                     const itemEvent = event as { item?: { type?: string; name?: string; call_id?: string } };
                     if (itemEvent.item?.type === 'function_call' && itemEvent.item?.name && CLIENT_SIDE_TOOLS.has(itemEvent.item.name)) {
@@ -233,6 +235,15 @@ export const useVoiceChat = () => {
                             handleVoiceControlTool(itemEvent.item.name, itemEvent.item.call_id || '', dataChannel);
                         }
                         // Skip passing to handleEvent - we handled it client-side
+                        return;
+                    }
+                }
+                
+                // ALSO intercept response.function_call_arguments.done - this is what triggers executeToolCall
+                if (event.type === 'response.function_call_arguments.done') {
+                    const fnEvent = event as { name?: string; call_id?: string };
+                    if (fnEvent.name && CLIENT_SIDE_TOOLS.has(fnEvent.name)) {
+                        // Skip - already handled via response.output_item.added
                         return;
                     }
                 }
