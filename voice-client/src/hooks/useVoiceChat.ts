@@ -224,10 +224,7 @@ export const useVoiceChat = () => {
 
             // Trigger a response so the model can acknowledge
             const responseCreate = {
-                type: 'response.create',
-                response: {
-                    modalities: ['text', 'audio'],
-                }
+                type: 'response.create'
             };
             dataChannel.send(JSON.stringify(responseCreate));
             console.log(`[VoiceChat] Triggered response for ${toolName} acknowledgment`);
