@@ -13,7 +13,11 @@ import { DisconnectReason } from '../lib/connectionHealth';
 import { voiceConfig } from '../config/voiceConfig';
 
 // Voice control tools that are handled client-side
-const CLIENT_SIDE_TOOLS = new Set(['pause_replies', 'resume_replies']);
+// Include both old and new names for backwards compatibility with cached sessions
+const CLIENT_SIDE_TOOLS = new Set([
+    'pause_replies', 'resume_replies',           // New names
+    'enter_listen_mode', 'exit_listen_mode',     // Old names (for cached sessions)
+]);
 
 export const useVoiceChat = () => {
     const { 
@@ -184,12 +188,14 @@ export const useVoiceChat = () => {
 
         console.log(`[VoiceChat] Handling client-side tool: ${toolName}`);
 
-        // Execute the appropriate action
+        // Execute the appropriate action (handle both old and new names)
         switch (toolName) {
             case 'pause_replies':
+            case 'enter_listen_mode':  // Old name alias
                 micControl.pauseReplies();
                 break;
             case 'resume_replies':
+            case 'exit_listen_mode':   // Old name alias
                 micControl.resumeReplies();
                 break;
             default:
