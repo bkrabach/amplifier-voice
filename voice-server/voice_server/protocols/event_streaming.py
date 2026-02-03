@@ -117,7 +117,9 @@ class EventStreamingHook:
 
             # Extract delta text for convenience
             delta = data.get("delta", {})
-            delta_text = delta.get("text", "") if isinstance(delta, dict) else str(delta)
+            delta_text = (
+                delta.get("text", "") if isinstance(delta, dict) else str(delta)
+            )
 
             return {
                 "type": "content_delta",
@@ -181,9 +183,13 @@ class EventStreamingHook:
                 "tool_name": data.get("tool_name", "unknown"),
                 "tool_call_id": data.get("tool_call_id", ""),
                 "output": (
-                    result.get("output", "") if isinstance(result, dict) else str(result)
+                    result.get("output", "")
+                    if isinstance(result, dict)
+                    else str(result)
                 ),
-                "success": result.get("success", True) if isinstance(result, dict) else True,
+                "success": result.get("success", True)
+                if isinstance(result, dict)
+                else True,
                 "error": result.get("error") if isinstance(result, dict) else None,
                 **sanitized,
             }
@@ -241,6 +247,23 @@ class EventStreamingHook:
         elif event == "user:notification":
             return {
                 "type": "display_message",
+                **sanitized,
+            }
+
+        # Cancellation events
+        elif event == "cancel:requested":
+            return {
+                "type": "cancel_requested",
+                "level": data.get("level", "graceful"),
+                "running_tools": data.get("running_tools", []),
+                **sanitized,
+            }
+
+        elif event == "cancel:completed":
+            return {
+                "type": "cancel_completed",
+                "level": data.get("level", "graceful"),
+                "tools_cancelled": data.get("tools_cancelled", 0),
                 **sanitized,
             }
 
@@ -319,4 +342,7 @@ EVENTS_TO_CAPTURE = [
     # Approvals
     "approval:request",
     "approval:response",
+    # Cancellation
+    "cancel:requested",
+    "cancel:completed",
 ]

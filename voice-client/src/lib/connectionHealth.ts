@@ -142,6 +142,10 @@ export class ConnectionHealthManager {
 
     /** Call when WebRTC connection state changes */
     recordConnectionState(state: string): void {
+        const lastState = this.metrics.connectionStateHistory.length > 0
+            ? this.metrics.connectionStateHistory[this.metrics.connectionStateHistory.length - 1].state
+            : null;
+        
         this.metrics.connectionStateHistory.push({
             state,
             timestamp: Date.now(),
@@ -153,7 +157,10 @@ export class ConnectionHealthManager {
                 this.metrics.connectionStateHistory.slice(-100);
         }
 
-        console.log(`[HealthManager] Connection state: ${state}`);
+        // Only log state changes to reduce noise
+        if (state !== lastState) {
+            console.log(`[HealthManager] Connection state: ${state}`);
+        }
     }
 
     /** Analyze current state to determine likely disconnect reason */

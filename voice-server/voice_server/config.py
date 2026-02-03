@@ -7,13 +7,15 @@ from pydantic_settings import BaseSettings
 log_level = os.environ.get("LOG_LEVEL", "INFO")
 openai_api_key = os.environ.get("OPENAI_API_KEY")
 
+# Voice assistant name (used in prompts and voice keywords)
+assistant_name = os.environ.get("ASSISTANT_NAME", "Amplifier")
+
 # Amplifier configuration from environment
-# Use exp-amplifier-dev bundle which includes the NEW delegate tool (not legacy task tool)
+# Use amplifier-dev bundle which includes the delegate tool
 # The delegate tool provides enhanced context control and session resumption
-amplifier_bundle = os.environ.get("AMPLIFIER_BUNDLE", "exp-amplifier-dev")
-amplifier_cwd = os.environ.get(
-    "AMPLIFIER_CWD", os.path.expanduser("~/amplifier-working")
-)
+amplifier_bundle = os.environ.get("AMPLIFIER_BUNDLE", "amplifier-dev")
+# Default to current working directory - users typically run from their project folder
+amplifier_cwd = os.environ.get("AMPLIFIER_CWD", os.getcwd())
 amplifier_auto_approve = (
     os.environ.get("AMPLIFIER_AUTO_APPROVE", "true").lower() == "true"
 )
@@ -45,11 +47,13 @@ class RealtimeSettings(BaseSettings):
     # New GA voices: cedar, marin (exclusive to Realtime API)
     voice: str = "marin"
 
-    # System instructions for the voice assistant
+    # Assistant name (injected into instructions at runtime)
+    name: str = assistant_name
+
+    # Base system instructions (without identity - that's injected dynamically)
     # Note: Voice, turn_detection, and transcription are configured via client-side
     # session.update after WebRTC connection (GA API restriction)
-    instructions: str = dedent("""
-            You are Amplifier, a powerful voice assistant backed by specialist AI agents.
+    _base_instructions: str = dedent("""
             Talk quickly and be extremely succinct. Be friendly and conversational.
 
             YOU ARE AN ORCHESTRATOR. You have ONE tool:
@@ -132,10 +136,33 @@ class RealtimeSettings(BaseSettings):
               results - you may already have the answer!
             - When multiple results are ready, report them one after another without waiting
 
+            CANCELLATION:
+            You have a cancel_current_task tool. Use it when the user wants to stop:
+            - "stop", "cancel", "never mind", "abort", "hold on", "wait"
+            - User sounds frustrated and wants to interrupt
+            
+            Cancellation levels:
+            - Default (immediate=false): Wait for current operations to finish gracefully
+            - Urgent (immediate=true): Stop NOW - use for "stop NOW!", repeated "stop stop", urgency
+            
+            After cancellation:
+            - Graceful: "Okay, I'll stop after the current task finishes."
+            - Immediate: "Stopping now."
+            - Nothing running: "I'm not doing anything right now."
+            
+            IMPORTANT: If the user speaks while you're just talking (no tools running), that's
+            a normal interruption - just stop talking and listen. Only use cancel_current_task
+            when there are actual operations running (delegations, tool calls).
+
             You operate in a working directory where agents can create files, run code,
             and build projects. Think of yourself as the friendly voice interface to a
             team of expert AI agents ready to help.
         """).strip()
+
+    def get_instructions(self) -> str:
+        """Get full instructions with assistant name injected."""
+        identity = f"You are {self.name}, a powerful voice assistant backed by specialist AI agents."
+        return f"{identity}\n{self._base_instructions}"
 
 
 class AmplifierSettings(BaseSettings):

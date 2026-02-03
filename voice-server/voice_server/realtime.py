@@ -58,11 +58,12 @@ async def create_realtime_session(
 
     # Build GA API session config
     # GA API is VERY restrictive - only these parameters are allowed at session creation
+    # Instructions are generated dynamically to inject the assistant name
     session_config = {
         "session": {
             "type": "realtime",  # Required in GA API
             "model": settings.realtime.model,
-            "instructions": settings.realtime.instructions,
+            "instructions": settings.realtime.get_instructions(),
             "tools": available_tools,
         }
     }

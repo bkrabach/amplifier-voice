@@ -16,8 +16,12 @@ import { useTranscriptStore } from '../stores/transcriptStore';
 
 const BASE_URL = 'http://127.0.0.1:8080';
 
+// Track consecutive server failures to reduce console noise
+let consecutiveServerErrors = 0;
+const LOG_EVERY_N_ERRORS = 5; // Only log every 5th error to reduce noise
+
 // Tool name to friendly display name
-const getFriendlyToolName = (toolName: string, toolArgs?: string): string => {
+const getFriendlyToolName = (toolName: string, toolArgs?: Record<string, unknown> | string): string => {
     const friendlyNames: Record<string, string> = {
         'bash': 'command line',
         'filesystem': 'file system',
@@ -33,10 +37,11 @@ const getFriendlyToolName = (toolName: string, toolArgs?: string): string => {
     // Special handling for delegate tool - extract agent name
     if (toolName === 'delegate' && toolArgs) {
         try {
-            const args = JSON.parse(toolArgs);
+            // Handle both string (JSON) and object arguments
+            const args = typeof toolArgs === 'string' ? JSON.parse(toolArgs) : toolArgs;
             if (args.agent) {
                 // Extract friendly agent name from "foundation:explorer" -> "explorer"
-                const agentParts = args.agent.split(':');
+                const agentParts = (args.agent as string).split(':');
                 const agentName = agentParts[agentParts.length - 1]
                     .replace(/-/g, ' ')
                     .replace(/_/g, ' ');
@@ -63,7 +68,18 @@ const getFriendlyToolName = (toolName: string, toolArgs?: string): string => {
     return toolName.replace(/_/g, ' ').replace(/-/g, ' ');
 };
 
-export const useChatMessages = () => {
+export interface UseChatMessagesOptions {
+    /**
+     * Callback to check if auto-response is allowed.
+     * When returns false, transcription won't automatically trigger response.create.
+     * Used for mute and listen modes.
+     */
+    shouldAutoRespond?: () => boolean;
+}
+
+export const useChatMessages = (options: UseChatMessagesOptions = {}) => {
+    const { shouldAutoRespond } = options;
+    
     const [messages, setMessages] = useState<Message[]>([]);
     const activeUserMessageRef = useRef<string | null>(null);
     const activeAssistantMessageRef = useRef<Message | null>(null);
@@ -160,7 +176,12 @@ export const useChatMessages = () => {
             }
 
             const result = await response.json() as AmplifierToolResult;
-            console.log('Tool result:', result);
+            
+            // Reset error counter on successful call
+            if (consecutiveServerErrors > 0) {
+                console.log('[ChatMessages] Server connection restored');
+                consecutiveServerErrors = 0;
+            }
 
             // Update status message - match by toolCallId to only update THIS specific call
             setMessages(prev => prev.map(msg =>
@@ -213,7 +234,23 @@ export const useChatMessages = () => {
 
         } catch (err) {
             const error = err instanceof Error ? err.message : 'Unknown error';
-            console.error('Tool execution error:', error);
+            const isServerError = error.includes('Failed to fetch') || 
+                                  error.includes('NetworkError') ||
+                                  error.includes('fetch');
+            
+            if (isServerError) {
+                consecutiveServerErrors++;
+                // Only log periodically when server is down to avoid console flood
+                if (consecutiveServerErrors === 1) {
+                    console.warn('[ChatMessages] Server unreachable - tool calls will fail');
+                } else if (consecutiveServerErrors % LOG_EVERY_N_ERRORS === 0) {
+                    console.warn(`[ChatMessages] Server still unreachable (${consecutiveServerErrors} failed calls)`);
+                }
+            } else {
+                // Non-server errors always get logged
+                consecutiveServerErrors = 0;
+                console.error('Tool execution error:', error);
+            }
 
             // Update status to error - match by toolCallId to only update THIS specific call
             setMessages(prev => prev.map(msg =>
@@ -326,9 +363,13 @@ export const useChatMessages = () => {
                     
                     // With create_response: false, we manually trigger response
                     // The MODEL decides (via instructions) how much to say
-                    if (dataChannelRef.current?.readyState === 'open') {
+                    // BUT check if auto-respond is allowed (mute/listen mode may disable)
+                    const autoRespondAllowed = shouldAutoRespond ? shouldAutoRespond() : true;
+                    if (dataChannelRef.current?.readyState === 'open' && autoRespondAllowed) {
                         console.log('[ChatMessages] Triggering response.create - model decides how to respond');
                         dataChannelRef.current.send(JSON.stringify({ type: 'response.create' }));
+                    } else if (!autoRespondAllowed) {
+                        console.log('[ChatMessages] Auto-respond blocked (muted or replies paused)');
                     }
                 }
                 break;

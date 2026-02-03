@@ -10,6 +10,8 @@ This service provides:
 import asyncio
 import json
 import logging
+import os
+from pathlib import Path
 from typing import Callable, Any, Dict, Optional
 from contextlib import asynccontextmanager, AsyncExitStack
 
@@ -147,11 +149,83 @@ def service_init(app: FastAPI, register_lifespan_handler: Callable):
         return {
             "status": "healthy",
             "version": settings.service.version,
+            "assistant_name": settings.realtime.name,
             "amplifier": {
                 "enabled": _amplifier_bridge is not None,
                 "tools_count": tools_count,
             },
             "model": settings.realtime.model,
+        }
+
+    # ============ Cancellation Endpoint ============
+
+    @app.post("/cancel")
+    async def cancel_execution(request: Request) -> Dict[str, Any]:
+        """
+        Cancel current Amplifier operations.
+
+        This endpoint allows the UI to cancel running tasks without going through
+        the voice model. Useful for:
+        - Stop button in UI
+        - Programmatic cancellation
+        - Emergency stops when voice model is unresponsive
+
+        Body (optional):
+        - immediate: bool - If true, stop immediately (default: false for graceful)
+        - reason: str - Optional reason for logging
+
+        Returns cancellation status including what was running.
+        """
+        if not _amplifier_bridge:
+            raise HTTPException(
+                status_code=503, detail="Amplifier bridge not initialized"
+            )
+
+        # Parse optional body
+        try:
+            body = await request.json()
+            immediate = body.get("immediate", False)
+            reason = body.get("reason", "UI cancel button")
+        except Exception:
+            immediate = False
+            reason = "UI cancel button"
+
+        logger.info(
+            f"Cancel requested via HTTP: immediate={immediate}, reason={reason}"
+        )
+
+        result = await _amplifier_bridge.request_cancel(immediate=immediate)
+
+        return {
+            "cancelled": result.get("cancelled", False),
+            "level": result.get("level", "graceful"),
+            "running_tools": result.get("running_tools", []),
+            "was_already_cancelled": result.get("was_already_cancelled", False),
+        }
+
+    @app.get("/cancel/status")
+    async def get_cancellation_status() -> Dict[str, Any]:
+        """
+        Get current cancellation state.
+
+        Returns whether cancellation is in progress and what's running.
+        Useful for UI to show appropriate feedback.
+        """
+        if not _amplifier_bridge:
+            return {
+                "is_cancellable": False,
+                "is_cancelled": False,
+                "running_tools": [],
+                "active_children": 0,
+            }
+
+        state = _amplifier_bridge.cancellation_state
+        return {
+            "is_cancellable": _amplifier_bridge.is_cancellable,
+            "is_cancelled": state.get("is_cancelled", False),
+            "level": state.get("level"),
+            "running_tools": state.get("running_tools", []),
+            "active_children": state.get("active_children", 0),
         }
 
     # ============ Event Streaming (SSE) for Debugging ============
@@ -180,7 +254,7 @@ def service_init(app: FastAPI, register_lifespan_handler: Callable):
         async def generate_events():
             """Generator that yields SSE-formatted events from the queue."""
             logger.info("[SSE] Client connected to event stream")
-            
+
             try:
                 while True:
                     # Check if client disconnected
@@ -192,17 +266,17 @@ def service_init(app: FastAPI, register_lifespan_handler: Callable):
                         # Wait for event with timeout to check for disconnect
                         event = await asyncio.wait_for(
                             _amplifier_bridge.event_queue.get(),
-                            timeout=30.0  # Send keepalive every 30s
+                            timeout=30.0,  # Send keepalive every 30s
                         )
-                        
+
                         # Format as SSE
                         event_data = json.dumps(event)
                         yield f"data: {event_data}\n\n"
-                        
+
                     except asyncio.TimeoutError:
                         # Send keepalive comment to prevent connection timeout
                         yield ": keepalive\n\n"
-                        
+
             except asyncio.CancelledError:
                 logger.info("[SSE] Event stream cancelled")
             except Exception as e:
@@ -406,6 +480,23 @@ def service_init(app: FastAPI, register_lifespan_handler: Callable):
         global _amplifier_bridge, _transcript_repo
 
         try:
+            # Validate/create working directory
+            cwd_path = Path(settings.amplifier.cwd).resolve()
+            explicit_cwd = os.environ.get("AMPLIFIER_CWD")
+
+            if explicit_cwd and not cwd_path.exists():
+                # User explicitly configured a path - create it for them
+                logger.info(f"Creating configured working directory: {cwd_path}")
+                cwd_path.mkdir(parents=True, exist_ok=True)
+            elif not cwd_path.exists():
+                # This shouldn't happen (cwd always exists), but be defensive
+                raise RuntimeError(
+                    f"Working directory does not exist: {cwd_path}\n"
+                    f"Set AMPLIFIER_CWD to a valid path or run from an existing directory."
+                )
+
+            logger.info(f"Working directory: {cwd_path}")
+
             # Initialize transcript repository
             logger.info("Initializing transcript repository...")
             _transcript_repo = TranscriptRepository()

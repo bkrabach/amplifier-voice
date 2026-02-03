@@ -17,6 +17,11 @@ import { useEffect, useRef, useState } from 'react';
 
 const API_BASE = 'http://localhost:8080';
 
+// Rate limiting for connection errors to reduce console noise
+let lastErrorLogTime = 0;
+let errorCount = 0;
+const ERROR_LOG_INTERVAL_MS = 30000; // Only log errors every 30 seconds
+
 // Event type to icon/color mapping
 const EVENT_STYLES: Record<string, { icon: string; color: string; label: string }> = {
   // Provider/LLM events - the key debugging info
@@ -81,13 +86,15 @@ interface AmplifierEventsState {
 
 function formatTimestamp(): string {
   const now = new Date();
-  return now.toLocaleTimeString('en-US', {
+  const timeStr = now.toLocaleTimeString('en-US', {
     hour12: false,
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
-    fractionalSecondDigits: 3,
   });
+  // Manually append milliseconds since fractionalSecondDigits isn't widely supported
+  const ms = now.getMilliseconds().toString().padStart(3, '0');
+  return `${timeStr}.${ms}`;
 }
 
 function logEvent(event: AmplifierEvent): void {
@@ -165,6 +172,9 @@ export function useAmplifierEvents(options: UseAmplifierEventsOptions = {}) {
     error: null,
   });
 
+  // Track if we've logged the initial connection attempt
+  const hasLoggedConnectRef = useRef(false);
+
   // Connect function - stable, no dependencies
   const connect = () => {
     // Close existing connection if any
@@ -173,14 +183,26 @@ export function useAmplifierEvents(options: UseAmplifierEventsOptions = {}) {
       eventSourceRef.current = null;
     }
 
-    console.log('%c[AmplifierEvents] Connecting to SSE stream...', 'color: #8b5cf6;');
+    // Only log the first connection attempt to reduce noise
+    if (!hasLoggedConnectRef.current) {
+      console.log('%c[AmplifierEvents] Connecting to SSE stream...', 'color: #8b5cf6;');
+      hasLoggedConnectRef.current = true;
+    }
 
     const eventSource = new EventSource(`${API_BASE}/events`);
     eventSourceRef.current = eventSource;
 
     eventSource.onopen = () => {
       if (!mountedRef.current) return;
-      console.log('%c[AmplifierEvents] Connected to event stream', 'color: #22c55e;');
+      // Only log if we had errors before (reconnection success)
+      if (errorCount > 0 || lastErrorLogTime > 0) {
+        console.log('%c[AmplifierEvents] Reconnected to event stream', 'color: #22c55e;');
+      } else {
+        console.log('%c[AmplifierEvents] Connected to event stream', 'color: #22c55e;');
+      }
+      // Reset error tracking on successful connection
+      errorCount = 0;
+      lastErrorLogTime = 0;
       setState((prev) => ({ ...prev, connected: true, error: null }));
     };
 
@@ -219,7 +241,20 @@ export function useAmplifierEvents(options: UseAmplifierEventsOptions = {}) {
 
     eventSource.onerror = () => {
       if (!mountedRef.current) return;
-      console.warn('%c[AmplifierEvents] Connection error (will auto-reconnect)', 'color: #f59e0b;');
+      
+      // Rate-limit error logging to avoid console flood
+      errorCount++;
+      const now = Date.now();
+      if (now - lastErrorLogTime > ERROR_LOG_INTERVAL_MS) {
+        if (errorCount === 1) {
+          console.warn('%c[AmplifierEvents] Connection error (will auto-reconnect)', 'color: #f59e0b;');
+        } else {
+          console.warn(`%c[AmplifierEvents] Connection errors (${errorCount} attempts, will keep retrying)`, 'color: #f59e0b;');
+        }
+        lastErrorLogTime = now;
+        errorCount = 0;
+      }
+      
       setState((prev) => ({
         ...prev,
         connected: false,

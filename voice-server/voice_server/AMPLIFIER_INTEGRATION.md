@@ -62,9 +62,9 @@ The voice assistant uses a clean hybrid architecture:
 OPENAI_API_KEY=your_api_key
 
 # Amplifier Configuration (optional)
-AMPLIFIER_BUNDLE=exp-amplifier-dev  # Bundle with delegate tool
+AMPLIFIER_BUNDLE=amplifier-dev      # Bundle with delegate tool
 ANTHROPIC_API_KEY=sk-ant-...        # Required for agent delegation
-AMPLIFIER_CWD=/path/to/working    # Working directory for tools
+AMPLIFIER_CWD=/path/to/working    # Working directory for tools (default: current directory)
 AMPLIFIER_AUTO_APPROVE=true       # Auto-approve tools (recommended for voice)
 ```
 
@@ -79,7 +79,7 @@ class RealtimeSettings:
     session_config: dict = {...}
 
 class AmplifierSettings:
-    bundle: str = "exp-amplifier-dev"  # Bundle with delegate tool
+    bundle: str = "amplifier-dev"      # Bundle with delegate tool
     cwd: str = os.getcwd()
     auto_approve: bool = True
     tool_timeout: float = 300.0  # Agent tasks can take longer

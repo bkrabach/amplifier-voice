@@ -4,7 +4,6 @@ import {
     makeStyles,
 } from '@fluentui/react-components';
 import { VoiceChat } from './components/VoiceChat';
-import { useAmplifierEvents } from './hooks/useAmplifierEvents';
 import React from 'react';
 
 const useStyles = makeStyles({
@@ -17,33 +16,8 @@ const useStyles = makeStyles({
 export const App: React.FC = () => {
     const styles = useStyles();
     
-    // Initialize Amplifier event streaming for debugging
-    // Events are logged to browser console with color-coded icons
-    // Open DevTools Console to see: 🔼 LLM requests, 🔽 responses, 🔧 tools, 🔀 agent spawns
-    const { connected, eventCount } = useAmplifierEvents({
-        autoConnect: true,
-        logToConsole: true,
-    });
-
-    // Log connection status on mount
-    React.useEffect(() => {
-        if (connected) {
-            console.log(
-                '%c[AmplifierEvents] Debug stream active - watching for events...',
-                'color: #8b5cf6; font-weight: bold;'
-            );
-        }
-    }, [connected]);
-
-    // Log event count periodically (every 50 events)
-    React.useEffect(() => {
-        if (eventCount > 0 && eventCount % 50 === 0) {
-            console.log(
-                `%c[AmplifierEvents] ${eventCount} events captured`,
-                'color: #6b7280;'
-            );
-        }
-    }, [eventCount]);
+    // Note: Amplifier event streaming is now handled in VoiceChat component
+    // where it's wired up to the cancellation handler for tracking tool state
 
     return (
         <FluentProvider theme={webLightTheme} className={styles.root}>

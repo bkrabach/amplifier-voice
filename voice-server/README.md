@@ -72,13 +72,14 @@ The server uses the `amplifier-dev` bundle which includes:
 ### 1. Install
 
 ```bash
-cd /Users/brkrabac/repos/realtime-voice/amplifier-voice/voice-server
+cd voice-server
 
-# Create virtual environment
-python3 -m venv .venv
+# Create and activate virtual environment
+uv venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
 # Install package and dependencies
-.venv/bin/pip install -e .
+uv pip install -e .
 ```
 
 ### 2. Configure
@@ -91,7 +92,7 @@ OPENAI_API_KEY=sk-...
 
 # Amplifier configuration (optional)
 AMPLIFIER_BUNDLE=amplifier-dev  # Default bundle with all tools
-AMPLIFIER_CWD=/path/to/your/project  # Working directory for tools
+AMPLIFIER_CWD=/path/to/your/project  # Working directory for tools (default: current directory)
 AMPLIFIER_AUTO_APPROVE=true  # Auto-approve tool execution
 
 # Server configuration (optional)
@@ -104,10 +105,10 @@ LOG_LEVEL=INFO
 
 ```bash
 # Start server
-.venv/bin/python -m voice_server.start
+uv run voice-server
 
 # Or with custom port
-.venv/bin/python -m voice_server.start --port 8080
+uv run voice-server --port 8080
 ```
 
 ### 4. Test
@@ -302,7 +303,7 @@ This server uses the **GA (General Availability) version** of the Realtime API w
 
 ```bash
 # Quick startup test
-.venv/bin/python test_startup.py
+uv run python test_startup.py
 
 # This tests:
 # - Settings load
@@ -372,7 +373,9 @@ AMPLIFIER_BUNDLE=amplifier-dev
 
 Check that dependencies are installed:
 ```bash
-.venv/bin/pip install -e .
+uv venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+uv pip install -e .
 ```
 
 ### "OpenAI API error"

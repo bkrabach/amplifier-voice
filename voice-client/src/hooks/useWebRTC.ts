@@ -27,6 +27,7 @@ export interface WebRTCHealthCallbacks {
     onDataChannelStateChange?: (state: 'open' | 'closed') => void;
     onEvent?: (eventType: string) => void;
     onDisconnect?: (reason: 'connection_failed' | 'data_channel_closed' | 'ice_failed' | 'user_initiated') => void;
+    onAudioTrack?: (track: MediaStreamTrack) => void;
 }
 
 export const useWebRTC = () => {
@@ -77,6 +78,10 @@ export const useWebRTC = () => {
             // Add audio track to peer connection
             stream.getTracks().forEach(track => {
                 pc.addTrack(track, stream);
+                // Expose audio track for mute control
+                if (track.kind === 'audio') {
+                    healthCallbacksRef.current.onAudioTrack?.(track);
+                }
             });
 
             // Create data channel for events
@@ -196,15 +201,24 @@ export const useWebRTC = () => {
                 };
             };
 
+            // Track previous states to avoid duplicate logs
+            let lastConnectionState = 'new';
+            let lastIceState = 'new';
+
             // Monitor connection state for debugging and auto-reconnect
             pc.onconnectionstatechange = () => {
-                console.log('[WebRTC] Connection state:', pc.connectionState);
-                setState(s => ({ ...s, connectionState: pc.connectionState }));
-                healthCallbacksRef.current.onConnectionStateChange?.(pc.connectionState);
+                const newState = pc.connectionState;
+                // Only log actual state changes
+                if (newState !== lastConnectionState) {
+                    console.log('[WebRTC] Connection state:', newState);
+                    lastConnectionState = newState;
+                }
+                setState(s => ({ ...s, connectionState: newState }));
+                healthCallbacksRef.current.onConnectionStateChange?.(newState);
                 
-                if (pc.connectionState === 'disconnected') {
-                    console.warn('[WebRTC] Connection disconnected - may reconnect');
-                } else if (pc.connectionState === 'failed') {
+                if (newState === 'disconnected') {
+                    // Don't log warning for every disconnected state - it's often transient
+                } else if (newState === 'failed') {
                     console.error('[WebRTC] Connection failed');
                     setState(s => ({ 
                         ...s, 
@@ -212,18 +226,22 @@ export const useWebRTC = () => {
                         error: 'WebRTC connection failed - please reconnect'
                     }));
                     healthCallbacksRef.current.onDisconnect?.('connection_failed');
-                } else if (pc.connectionState === 'closed') {
-                    console.warn('[WebRTC] Connection closed');
+                } else if (newState === 'closed') {
                     setState(s => ({ ...s, connected: false }));
                 }
             };
 
             pc.oniceconnectionstatechange = () => {
-                console.log('[WebRTC] ICE connection state:', pc.iceConnectionState);
+                const newIceState = pc.iceConnectionState;
+                // Only log actual state changes
+                if (newIceState !== lastIceState) {
+                    console.log('[WebRTC] ICE state:', newIceState);
+                    lastIceState = newIceState;
+                }
                 
-                if (pc.iceConnectionState === 'disconnected') {
-                    console.warn('[WebRTC] ICE disconnected - connection may be unstable');
-                } else if (pc.iceConnectionState === 'failed') {
+                if (newIceState === 'disconnected') {
+                    // Transient state, don't log warning
+                } else if (newIceState === 'failed') {
                     console.error('[WebRTC] ICE connection failed');
                     setState(s => ({ 
                         ...s, 

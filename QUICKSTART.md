@@ -30,6 +30,12 @@ MAX_TURNS=10
 
 ```bash
 cd voice-server
+
+# Create and activate virtual environment
+uv venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+
+# Install package and dependencies
 uv pip install -e .
 ```
 
@@ -51,7 +57,7 @@ npm install
 
 ```bash
 cd voice-server
-python -m voice_server
+uv run voice-server
 ```
 
 You should see:
@@ -175,7 +181,7 @@ cd voice-client
 
 ### Add New Tools
 
-The voice assistant uses the `exp-amplifier-dev` bundle by default, which includes the
+The voice assistant uses the `amplifier-dev` bundle by default, which includes the
 `delegate` tool for agent orchestration. The bundle is configured in `voice_server/config.py`.
 
 Available agents for delegation:

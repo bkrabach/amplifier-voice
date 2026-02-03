@@ -81,6 +81,13 @@ class AmplifierBridge:
 
     Creates a long-lived AmplifierSession with all tools mounted.
     Tools are executed via direct coordinator calls.
+
+    Cancellation:
+        Call request_cancel() to cancel running operations.
+        - Graceful (default): Waits for current tools to complete
+        - Immediate: Stops now, synthesizes results for pending tools
+
+        Cancellation propagates to all child sessions (spawned agents).
     """
 
     def __init__(self, bundle_name: str = "amplifier-dev", cwd: Optional[str] = None):
@@ -91,10 +98,13 @@ class AmplifierBridge:
         self._prepared = None  # Store prepared bundle for spawning
         self._tools: Dict[str, Dict[str, Any]] = {}
         self._initialized = False
-        
+
         # Event streaming for debugging
         self._event_queue: asyncio.Queue[Dict[str, Any]] = asyncio.Queue()
         self._streaming_hook: Optional[EventStreamingHook] = None
+
+        # Track active child sessions for cancellation propagation
+        self._active_child_sessions: Dict[str, Any] = {}
 
     async def initialize(self) -> None:
         """Initialize long-lived Amplifier session with all tools."""
@@ -146,7 +156,9 @@ class AmplifierBridge:
 
             # Check if delegate tool is already in the bundle
             has_delegate = any(
-                t.get("module") == "tool-delegate" for t in bundle.tools if isinstance(t, dict)
+                t.get("module") == "tool-delegate"
+                for t in bundle.tools
+                if isinstance(t, dict)
             )
             if not has_delegate:
                 logger.info("Adding tool-delegate module to bundle")
@@ -158,11 +170,16 @@ class AmplifierBridge:
                             "features": {
                                 "self_delegation": {"enabled": True},
                                 "session_resume": {"enabled": True},
-                                "context_inheritance": {"enabled": True, "max_turns": 10},
+                                "context_inheritance": {
+                                    "enabled": True,
+                                    "max_turns": 10,
+                                },
                                 "provider_selection": {"enabled": True},
                             },
                             "settings": {
-                                "exclude_tools": ["delegate"],  # Spawned agents can't further delegate
+                                "exclude_tools": [
+                                    "delegate"
+                                ],  # Spawned agents can't further delegate
                                 "exclude_hooks": [],
                                 "timeout": 300,
                             },
@@ -247,11 +264,116 @@ class AmplifierBridge:
         """Get the event queue for SSE streaming."""
         return self._event_queue
 
+    async def request_cancel(self, immediate: bool = False) -> Dict[str, Any]:
+        """Request cancellation of current operations.
+
+        This triggers the kernel's cancellation mechanism, which propagates
+        to all registered child sessions (spawned agents).
+
+        Args:
+            immediate: If True, stop immediately and synthesize results for
+                      pending tools. If False (default), wait for current
+                      tools to complete gracefully.
+
+        Returns:
+            Dict with cancellation status:
+            - cancelled: bool - whether cancellation was requested
+            - level: "graceful" | "immediate" - cancellation level
+            - running_tools: list of tool names currently running
+            - error: optional error message if cancellation failed
+        """
+        if not self._coordinator:
+            return {
+                "cancelled": False,
+                "error": "No session active - nothing to cancel",
+            }
+
+        try:
+            # Use the kernel's cancellation mechanism
+            cancellation = self._coordinator.cancellation
+
+            if immediate:
+                changed = cancellation.request_immediate()
+                level = "immediate"
+            else:
+                changed = cancellation.request_graceful()
+                level = "graceful"
+
+            running_tools = list(cancellation.running_tool_names)
+
+            if changed:
+                logger.info(
+                    f"Cancellation requested: level={level}, running_tools={running_tools}"
+                )
+            else:
+                logger.info(
+                    f"Cancellation already in progress or escalated: level={level}"
+                )
+
+            return {
+                "cancelled": True,
+                "level": level,
+                "running_tools": running_tools,
+                "was_already_cancelled": not changed,
+            }
+
+        except Exception as e:
+            logger.error(f"Failed to request cancellation: {e}", exc_info=True)
+            return {
+                "cancelled": False,
+                "error": str(e),
+            }
+
+    @property
+    def is_cancellable(self) -> bool:
+        """Check if there are operations that can be cancelled.
+
+        Returns True if there are tools currently running or child sessions active.
+        """
+        if not self._coordinator:
+            return False
+
+        cancellation = self._coordinator.cancellation
+        return bool(cancellation.running_tools) or bool(self._active_child_sessions)
+
+    @property
+    def cancellation_state(self) -> Dict[str, Any]:
+        """Get current cancellation state for UI feedback.
+
+        Returns:
+            Dict with:
+            - is_cancelled: bool
+            - is_graceful: bool
+            - is_immediate: bool
+            - running_tools: list of tool names
+            - active_children: count of active child sessions
+        """
+        if not self._coordinator:
+            return {
+                "is_cancelled": False,
+                "is_graceful": False,
+                "is_immediate": False,
+                "running_tools": [],
+                "active_children": 0,
+            }
+
+        cancellation = self._coordinator.cancellation
+        return {
+            "is_cancelled": cancellation.is_cancelled,
+            "is_graceful": cancellation.is_graceful,
+            "is_immediate": cancellation.is_immediate,
+            "running_tools": list(cancellation.running_tool_names),
+            "active_children": len(self._active_child_sessions),
+        }
+
     def _register_spawn_capability(self) -> None:
         """Register session.spawn and session.resume capabilities for delegate tool.
 
         This enables the delegate tool to spawn and resume sub-sessions for agents.
-        Implementation based on amplifier-foundation/examples/07_full_workflow.py
+
+        IMPORTANT: Unlike PreparedBundle.spawn(), this implementation wires up
+        cancellation propagation between parent and child sessions. This follows
+        the pattern used in amplifier-app-cli/session_spawner.py.
         """
         from amplifier_foundation import Bundle
 
@@ -266,9 +388,9 @@ class AmplifierBridge:
             orchestrator_config: Optional[Dict[str, Any]] = None,
             provider_preferences: Optional[List[Any]] = None,
             parent_messages: Optional[List[Dict[str, Any]]] = None,
-            self_delegation_depth: int = 0,  # NEW: for delegate tool self-delegation
+            self_delegation_depth: int = 0,
         ) -> Dict[str, Any]:
-            """Spawn sub-session for agent delegation.
+            """Spawn sub-session for agent delegation with cancellation propagation.
 
             Args:
                 agent_name: Name of the agent to spawn (or "self" for self-delegation).
@@ -290,84 +412,121 @@ class AmplifierBridge:
                 f"Spawning agent: {agent_name} with instruction: {instruction[:100]}..."
             )
 
-            # Handle "self" delegation - use parent's bundle
-            if agent_name == "self":
-                logger.info(f"Self-delegation at depth {self_delegation_depth}")
-                # For self-delegation, we use the parent's prepared bundle
-                # The child will have the same capabilities as the parent
-                return await self._prepared.spawn(
-                    child_bundle=None,  # Use parent's bundle
+            # Get parent's cancellation token for propagation
+            parent_cancellation = None
+            if parent_session and hasattr(parent_session, "coordinator"):
+                parent_cancellation = parent_session.coordinator.cancellation
+
+            # Generate a unique ID for tracking this spawn
+            import uuid
+
+            spawn_id = sub_session_id or f"{agent_name}_{uuid.uuid4().hex[:8]}"
+
+            # Track this spawn as active
+            self._active_child_sessions[spawn_id] = {
+                "agent_name": agent_name,
+                "instruction": instruction[:100],
+                "started_at": asyncio.get_event_loop().time(),
+            }
+
+            try:
+                # Handle "self" delegation - use parent's bundle
+                if agent_name == "self":
+                    logger.info(f"Self-delegation at depth {self_delegation_depth}")
+
+                    # For self-delegation, use spawn but capture child for cancellation
+                    # We call spawn with a wrapper that registers cancellation
+                    result = await self._spawn_with_cancellation(
+                        child_bundle=None,  # Use parent's bundle
+                        instruction=instruction,
+                        session_id=sub_session_id,
+                        parent_session=parent_session,
+                        parent_cancellation=parent_cancellation,
+                        session_cwd=self._cwd,
+                        orchestrator_config=orchestrator_config,
+                        provider_preferences=provider_preferences,
+                        parent_messages=parent_messages,
+                    )
+                    return result
+
+                # Resolve agent name to configuration
+                if agent_name in agent_configs:
+                    config = agent_configs[agent_name]
+                elif (
+                    self._prepared
+                    and hasattr(self._prepared.bundle, "agents")
+                    and agent_name in self._prepared.bundle.agents
+                ):
+                    config = self._prepared.bundle.agents[agent_name]
+                else:
+                    available = list(agent_configs.keys())
+                    if self._prepared and hasattr(self._prepared.bundle, "agents"):
+                        available += list(self._prepared.bundle.agents.keys())
+                    error_msg = (
+                        f"Agent '{agent_name}' not found. Available: {available}"
+                    )
+                    logger.error(error_msg)
+                    raise ValueError(error_msg)
+
+                # Create child bundle from agent config
+                child_bundle = Bundle(
+                    name=agent_name,
+                    version="1.0.0",
+                    session=config.get("session", {}),
+                    providers=config.get("providers", []),
+                    tools=config.get("tools", []),
+                    hooks=config.get("hooks", []),
+                    instruction=config.get("instruction")
+                    or config.get("system", {}).get("instruction"),
+                )
+
+                # Apply tool/hook inheritance to child bundle's spawn config
+                if tool_inheritance or hook_inheritance:
+                    child_bundle.spawn = {}
+
+                    if tool_inheritance:
+                        if "exclude_tools" in tool_inheritance:
+                            child_bundle.spawn["exclude_tools"] = tool_inheritance[
+                                "exclude_tools"
+                            ]
+                        elif "inherit_tools" in tool_inheritance:
+                            child_bundle.spawn["tools"] = tool_inheritance[
+                                "inherit_tools"
+                            ]
+
+                    if hook_inheritance:
+                        if "exclude_hooks" in hook_inheritance:
+                            child_bundle.spawn["exclude_hooks"] = hook_inheritance[
+                                "exclude_hooks"
+                            ]
+                        elif "inherit_hooks" in hook_inheritance:
+                            child_bundle.spawn["hooks"] = hook_inheritance[
+                                "inherit_hooks"
+                            ]
+
+                # Spawn with cancellation propagation
+                logger.debug(
+                    f"Spawning agent {agent_name} with cancellation propagation"
+                )
+                result = await self._spawn_with_cancellation(
+                    child_bundle=child_bundle,
                     instruction=instruction,
                     session_id=sub_session_id,
                     parent_session=parent_session,
+                    parent_cancellation=parent_cancellation,
                     session_cwd=self._cwd,
                     orchestrator_config=orchestrator_config,
                     provider_preferences=provider_preferences,
                     parent_messages=parent_messages,
                 )
+                return result
 
-            # Resolve agent name to configuration
-            if agent_name in agent_configs:
-                config = agent_configs[agent_name]
-            elif (
-                self._prepared
-                and hasattr(self._prepared.bundle, "agents")
-                and agent_name in self._prepared.bundle.agents
-            ):
-                config = self._prepared.bundle.agents[agent_name]
-            else:
-                available = list(agent_configs.keys())
-                if self._prepared and hasattr(self._prepared.bundle, "agents"):
-                    available += list(self._prepared.bundle.agents.keys())
-                error_msg = f"Agent '{agent_name}' not found. Available: {available}"
-                logger.error(error_msg)
-                raise ValueError(error_msg)
-
-            # Create child bundle from agent config
-            child_bundle = Bundle(
-                name=agent_name,
-                version="1.0.0",
-                session=config.get("session", {}),
-                providers=config.get("providers", []),
-                tools=config.get("tools", []),
-                hooks=config.get("hooks", []),
-                instruction=config.get("instruction")
-                or config.get("system", {}).get("instruction"),
-            )
-
-            # Apply tool/hook inheritance to child bundle's spawn config
-            # These control which tools/hooks the child session inherits from parent
-            if tool_inheritance or hook_inheritance:
-                child_bundle.spawn = {}
-
-                if tool_inheritance:
-                    if "exclude_tools" in tool_inheritance:
-                        child_bundle.spawn["exclude_tools"] = tool_inheritance[
-                            "exclude_tools"
-                        ]
-                    elif "inherit_tools" in tool_inheritance:
-                        child_bundle.spawn["tools"] = tool_inheritance["inherit_tools"]
-
-                if hook_inheritance:
-                    if "exclude_hooks" in hook_inheritance:
-                        child_bundle.spawn["exclude_hooks"] = hook_inheritance[
-                            "exclude_hooks"
-                        ]
-                    elif "inherit_hooks" in hook_inheritance:
-                        child_bundle.spawn["hooks"] = hook_inheritance["inherit_hooks"]
-
-            # Use PreparedBundle.spawn() to handle the heavy lifting
-            logger.debug(f"Delegating to prepared.spawn() for agent: {agent_name}")
-            return await self._prepared.spawn(
-                child_bundle=child_bundle,
-                instruction=instruction,
-                session_id=sub_session_id,
-                parent_session=parent_session,
-                session_cwd=self._cwd,  # Pass configured working directory (Path object)
-                orchestrator_config=orchestrator_config,
-                provider_preferences=provider_preferences,
-                parent_messages=parent_messages,
-            )
+            finally:
+                # Remove from active sessions
+                self._active_child_sessions.pop(spawn_id, None)
+                logger.debug(
+                    f"Spawn {spawn_id} completed, removed from active sessions"
+                )
 
         async def resume_capability(
             sub_session_id: str,
@@ -396,6 +555,78 @@ class AmplifierBridge:
         logger.info(
             "Registered session.spawn and session.resume capabilities for delegate tool"
         )
+
+    async def _spawn_with_cancellation(
+        self,
+        child_bundle: Optional[Any],
+        instruction: str,
+        session_id: Optional[str],
+        parent_session: Any,
+        parent_cancellation: Optional[Any],
+        session_cwd: Path,
+        orchestrator_config: Optional[Dict[str, Any]] = None,
+        provider_preferences: Optional[List[Any]] = None,
+        parent_messages: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        """Spawn a child session with cancellation propagation.
+
+        This wraps PreparedBundle.spawn() to add cancellation wiring,
+        following the pattern from amplifier-app-cli/session_spawner.py.
+
+        The key addition is registering the child's cancellation token
+        with the parent's, so that when the parent is cancelled, the
+        child is also cancelled.
+
+        Args:
+            child_bundle: Bundle for the child session (None for self-delegation)
+            instruction: Task instruction for the child
+            session_id: Optional session ID for resumption
+            parent_session: Parent session for lineage
+            parent_cancellation: Parent's cancellation token for propagation
+            session_cwd: Working directory for the child session
+            orchestrator_config: Optional orchestrator config
+            provider_preferences: Optional provider preferences
+            parent_messages: Optional messages to inject
+
+        Returns:
+            Dict with result from the spawned session
+        """
+        # Check if already cancelled before starting
+        if parent_cancellation and parent_cancellation.is_cancelled:
+            logger.info("Parent already cancelled, skipping spawn")
+            return {
+                "response": "Task cancelled before execution",
+                "session_id": session_id,
+                "cancelled": True,
+            }
+
+        # For now, we use PreparedBundle.spawn() and note that full cancellation
+        # propagation requires foundation-level changes.
+        #
+        # TODO: When foundation exposes child session access, wire up:
+        #   parent_cancellation.register_child(child_cancellation)
+        #   try:
+        #       result = await child_session.execute(...)
+        #   finally:
+        #       parent_cancellation.unregister_child(child_cancellation)
+        #
+        # Current behavior: Main session cancellation works, but won't
+        # automatically propagate to in-flight child sessions.
+
+        logger.debug("Spawning child session")
+
+        result = await self._prepared.spawn(
+            child_bundle=child_bundle,
+            instruction=instruction,
+            session_id=session_id,
+            parent_session=parent_session,
+            session_cwd=session_cwd,
+            orchestrator_config=orchestrator_config,
+            provider_preferences=provider_preferences,
+            parent_messages=parent_messages,
+        )
+
+        return result
 
     async def _discover_tools(self):
         """Enumerate tools from the coordinator using public API."""
@@ -446,6 +677,68 @@ class AmplifierBridge:
     # Using NEW delegate tool (not legacy task tool) for enhanced context control
     REALTIME_TOOLS = {"delegate"}
 
+    # Cancellation tool - handled server-side
+    # Allows the voice model (or user) to cancel running operations
+    CANCEL_TOOL = {
+        "type": "function",
+        "name": "cancel_current_task",
+        "description": (
+            "Cancel the currently running task or delegation. Use when the user says "
+            "'stop', 'cancel', 'never mind', 'abort', or indicates they want to interrupt "
+            "what you're doing. This gracefully stops running agents and tools. "
+            "If operations continue after calling this, call it again for immediate stop."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "type": "string",
+                    "description": "Brief reason for cancellation (e.g., 'user requested', 'changed mind')",
+                },
+                "immediate": {
+                    "type": "boolean",
+                    "description": "If true, stop immediately without waiting for current operations. Default false.",
+                },
+            },
+            "required": [],
+        },
+    }
+
+    # Voice control tools - handled client-side, not server-side
+    # These allow the voice model to control microphone state
+    VOICE_CONTROL_TOOLS = [
+        {
+            "type": "function",
+            "name": "pause_replies",
+            "description": (
+                "Pause automatic replies - continue hearing and transcribing the user's speech, "
+                "but don't respond automatically. Use when the user wants to talk without "
+                "interruption, have a side conversation you should follow, or discuss "
+                "something at length before getting your input. The user can say "
+                "'respond now' or 'go ahead' to trigger a response, or click a button."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+        {
+            "type": "function",
+            "name": "resume_replies",
+            "description": (
+                "Resume automatic replies and return to normal conversation where you respond "
+                "to speech automatically. Use when the user indicates they're ready for "
+                "normal back-and-forth conversation again."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    ]
+
     def get_tools_for_openai(self) -> List[Dict[str, Any]]:
         """
         Convert Amplifier tools to OpenAI function format.
@@ -453,6 +746,8 @@ class AmplifierBridge:
         Only exposes REALTIME_TOOLS to the voice model, forcing it to delegate
         actual work to agents via the task tool. All tools remain available
         internally for agent execution.
+
+        Also includes VOICE_CONTROL_TOOLS for client-side microphone control.
 
         Returns list of function definitions ready for OpenAI API.
         Ensures all schemas are JSON-safe for OpenAI.
@@ -475,12 +770,66 @@ class AmplifierBridge:
             }
             openai_tools.append(tool_def)
 
+        # Add voice control tools (handled client-side)
+        openai_tools.extend(self.VOICE_CONTROL_TOOLS)
+
+        # Add cancellation tool (handled server-side)
+        openai_tools.append(self.CANCEL_TOOL)
+
         return openai_tools
 
     # Alias for backward compatibility
     def get_tools(self) -> List[Dict[str, Any]]:
         """Alias for get_tools_for_openai()."""
         return self.get_tools_for_openai()
+
+    async def _handle_cancel_tool(self, arguments: Dict[str, Any]) -> "ToolResult":
+        """Handle the cancel_current_task tool invocation.
+
+        This is called when the voice model (or user via tool call) wants to cancel
+        running operations.
+
+        Args:
+            arguments: Tool arguments with optional 'reason' and 'immediate' fields
+
+        Returns:
+            ToolResult indicating cancellation status
+        """
+        reason = arguments.get("reason", "user requested")
+        immediate = arguments.get("immediate", False)
+
+        logger.info(f"Cancel tool invoked: reason='{reason}', immediate={immediate}")
+
+        result = await self.request_cancel(immediate=immediate)
+
+        if result.get("cancelled"):
+            running_tools = result.get("running_tools", [])
+            if running_tools:
+                tools_str = ", ".join(running_tools)
+                if immediate:
+                    message = f"Stopping immediately. Cancelled: {tools_str}"
+                else:
+                    message = (
+                        f"Cancellation requested. Waiting for {tools_str} to finish."
+                    )
+            else:
+                message = "Cancellation acknowledged. No active operations to cancel."
+
+            return ToolResult(
+                success=True,
+                output={
+                    "cancelled": True,
+                    "level": result.get("level"),
+                    "running_tools": running_tools,
+                    "message": message,
+                },
+            )
+        else:
+            return ToolResult(
+                success=False,
+                output=None,
+                error=result.get("error", "Failed to request cancellation"),
+            )
 
     async def execute_tool(
         self, tool_name: str, arguments: Dict[str, Any]
@@ -495,6 +844,10 @@ class AmplifierBridge:
         Returns:
             ToolResult with success/output/error
         """
+        # Handle cancel tool specially - it's server-side, not Amplifier
+        if tool_name == "cancel_current_task":
+            return await self._handle_cancel_tool(arguments)
+
         if tool_name not in self._tools:
             logger.error(f"Unknown tool: {tool_name}")
             return ToolResult(

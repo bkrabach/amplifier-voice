@@ -1,11 +1,19 @@
 // hooks/useVoiceChat.ts
-import { useCallback } from 'react';
+import { useCallback, useRef } from 'react';
 import { useWebRTC, WebRTCHealthCallbacks } from './useWebRTC';
 import { useChatMessages } from './useChatMessages';
 import { useConnectionHealth, ReconnectionConfig } from './useConnectionHealth';
+import { useServerHealth } from './useServerHealth';
+import { useMicrophoneControl } from './useMicrophoneControl';
+import { useVoiceKeywords } from './useVoiceKeywords';
+import { useCancellation } from './useCancellation';
 import { VoiceChatEvent } from '../models/VoiceChatEvent';
 import { useTranscriptStore, SessionEndReason } from '../stores/transcriptStore';
 import { DisconnectReason } from '../lib/connectionHealth';
+import { voiceConfig } from '../config/voiceConfig';
+
+// Voice control tools that are handled client-side
+const CLIENT_SIDE_TOOLS = new Set(['pause_replies', 'resume_replies']);
 
 export const useVoiceChat = () => {
     const { 
@@ -20,8 +28,79 @@ export const useVoiceChat = () => {
         injectContext 
     } = useWebRTC();
     
-    const { messages, handleEvent, clearMessages, loadPreviousMessages } = useChatMessages();
+    // Microphone control (mute, pause replies) - declare early for shouldAutoRespond
+    const micControl = useMicrophoneControl({
+        assistantName: voiceConfig.assistantName,  // Will be updated when server provides name
+    });
+
+    // Chat messages with auto-respond check based on mic state
+    // Uses micControl.shouldAutoRespond which reads from ref to avoid stale closures
+    const { messages, handleEvent, clearMessages, loadPreviousMessages } = useChatMessages({
+        shouldAutoRespond: micControl.shouldAutoRespond,
+    });
     
+    // Server health monitoring (separate from WebRTC connection)
+    const { 
+        serverStatus, 
+        consecutiveFailures: serverFailures,
+        checkNow: checkServerNow,
+        assistantName: serverAssistantName,
+    } = useServerHealth();
+
+    // Use server-provided assistant name if available, fall back to local config
+    const assistantName = serverAssistantName || voiceConfig.assistantName;
+
+    // Cancellation state and controls
+    const cancellation = useCancellation({
+        serverUrl: 'http://localhost:8080',
+        onCancelComplete: () => {
+            console.log('[VoiceChat] Cancellation completed');
+        },
+    });
+
+    // Update microphone control with server-provided assistant name
+    // (micControl declared earlier for shouldAutoRespond callback)
+
+    // Track data channel for microphone control
+    const dataChannelRef = useRef<RTCDataChannel | null>(null);
+
+    // Voice keyword detection
+    const voiceKeywords = useVoiceKeywords(
+        {
+            onPauseReplies: () => {
+                console.log('[VoiceChat] Voice keyword: pause replies');
+                micControl.pauseReplies();
+            },
+            onResumeReplies: () => {
+                console.log('[VoiceChat] Voice keyword: resume replies');
+                micControl.resumeReplies();
+            },
+            onRespondNow: () => {
+                console.log('[VoiceChat] Voice keyword: respond now');
+                micControl.triggerResponse();
+                // Also resume replies when responding
+                micControl.resumeReplies();
+            },
+            onMute: () => {
+                console.log('[VoiceChat] Voice keyword: mute');
+                if (!micControl.isMuted) {
+                    micControl.toggleMute();
+                }
+            },
+            onUnmute: () => {
+                console.log('[VoiceChat] Voice keyword: unmute');
+                if (micControl.isMuted) {
+                    micControl.toggleMute();
+                }
+            },
+        },
+        { 
+            assistantName,  // Use dynamic name from server or fallback
+            enabled: voiceConfig.voiceKeywordsEnabled,
+            debounceMs: voiceConfig.voiceKeywordDebounceMs,
+        }
+    );
+
     const { 
         sessionId, 
         createSession, 
@@ -68,6 +147,11 @@ export const useVoiceChat = () => {
                 health.recordActivity();
             }
         },
+        onAudioTrack: (track) => {
+            // Wire up audio track to mic control for muting
+            micControl.setAudioTrack(track);
+            console.log('[VoiceChat] Audio track connected to mic control');
+        },
         onDisconnect: (reason) => {
             const healthReason: DisconnectReason = 
                 reason === 'user_initiated' ? 'user_initiated' :
@@ -88,6 +172,76 @@ export const useVoiceChat = () => {
         },
     }), [health]);
 
+    // Handle voice control tool calls (client-side execution)
+    const handleVoiceControlTool = useCallback((
+        toolName: string,
+        _callId: string,
+        dataChannel: RTCDataChannel
+    ): boolean => {
+        if (!CLIENT_SIDE_TOOLS.has(toolName)) {
+            return false; // Not a client-side tool
+        }
+
+        console.log(`[VoiceChat] Handling client-side tool: ${toolName}`);
+
+        // Execute the appropriate action
+        switch (toolName) {
+            case 'pause_replies':
+                micControl.pauseReplies();
+                break;
+            case 'resume_replies':
+                micControl.resumeReplies();
+                break;
+            default:
+                console.warn(`[VoiceChat] Unknown client-side tool: ${toolName}`);
+                return false;
+        }
+
+        // Send tool result back to OpenAI (client-side execution succeeded)
+        // Note: We need to send a response.create after tool completion for the model to continue
+        // But for these control tools, the model handles the response naturally
+        
+        return true; // Handled
+    }, [micControl]);
+
+    // Process transcription events for voice keywords
+    const processTranscriptionForKeywords = useCallback((text: string) => {
+        if (text && text.length > 0) {
+            voiceKeywords.processTranscription(text);
+        }
+    }, [voiceKeywords]);
+
+    // Enhanced event handler that processes voice control tools and keywords
+    const createEventHandler = useCallback((dataChannel: RTCDataChannel) => {
+        return (data: string) => {
+            try {
+                const event = JSON.parse(data) as VoiceChatEvent;
+
+                // Check for function call events (voice control tools)
+                if (event.type === 'response.function_call_arguments.done') {
+                    const fnEvent = event as { name?: string; call_id?: string };
+                    if (fnEvent.name && fnEvent.call_id && CLIENT_SIDE_TOOLS.has(fnEvent.name)) {
+                        handleVoiceControlTool(fnEvent.name, fnEvent.call_id, dataChannel);
+                        // Still pass to handleEvent for UI updates
+                    }
+                }
+
+                // Check for transcription events (for keyword detection)
+                if (event.type === 'conversation.item.input_audio_transcription.completed') {
+                    const transcriptEvent = event as { transcript?: string };
+                    if (transcriptEvent.transcript) {
+                        processTranscriptionForKeywords(transcriptEvent.transcript);
+                    }
+                }
+
+                // Pass all events to the regular handler
+                handleEvent(event, dataChannel);
+            } catch (err) {
+                console.debug('Error parsing event:', err);
+            }
+        };
+    }, [handleEvent, handleVoiceControlTool, processTranscriptionForKeywords]);
+
     const startVoiceChat = async () => {
         try {
             // Create a new session for transcript tracking
@@ -96,12 +250,12 @@ export const useVoiceChat = () => {
             
             await connect(
                 (data: string, dataChannel: RTCDataChannel) => {
-                    try {
-                        const event = JSON.parse(data) as VoiceChatEvent;
-                        handleEvent(event, dataChannel);
-                    } catch (err) {
-                        console.debug('Error parsing event:', err);
+                    // Store data channel reference for microphone control
+                    if (dataChannel !== dataChannelRef.current) {
+                        dataChannelRef.current = dataChannel;
+                        micControl.setDataChannel(dataChannel);
                     }
+                    createEventHandler(dataChannel)(data);
                 },
                 undefined,  // No existing token for new session
                 createHealthCallbacks()
@@ -127,12 +281,12 @@ export const useVoiceChat = () => {
             // Connect with the new OpenAI session
             await connect(
                 (data: string, dataChannel: RTCDataChannel) => {
-                    try {
-                        const event = JSON.parse(data) as VoiceChatEvent;
-                        handleEvent(event, dataChannel);
-                    } catch (err) {
-                        console.debug('Error parsing event:', err);
+                    // Store data channel reference for microphone control
+                    if (dataChannel !== dataChannelRef.current) {
+                        dataChannelRef.current = dataChannel;
+                        micControl.setDataChannel(dataChannel);
                     }
+                    createEventHandler(dataChannel)(data);
                 },
                 resumeData.realtime.client_secret.value,
                 createHealthCallbacks()
@@ -173,6 +327,11 @@ export const useVoiceChat = () => {
         connectionState,
         dataChannelState,
         
+        // Server health (separate from WebRTC)
+        serverStatus,
+        serverFailures,
+        checkServerNow,
+        
         // Chat state
         transcripts: messages,
         audioRef,
@@ -185,6 +344,16 @@ export const useVoiceChat = () => {
         clearMessages,
         clearSession,
         
+        // Microphone control
+        micState: micControl.micState,
+        isMuted: micControl.isMuted,
+        isPaused: micControl.isPaused,
+        toggleMute: micControl.toggleMute,
+        pauseReplies: micControl.pauseReplies,
+        resumeReplies: micControl.resumeReplies,
+        triggerResponse: micControl.triggerResponse,
+        assistantName,  // Dynamic from server or fallback to local config
+        
         // Health monitoring (for ConnectionExperimentPanel)
         healthStatus: health.healthStatus,
         sessionDuration: health.sessionDuration,
@@ -196,5 +365,15 @@ export const useVoiceChat = () => {
         eventLog: health.eventLog,
         reconnectionConfig: health.reconnectionConfig,
         setReconnectionConfig,
+        
+        // Cancellation controls
+        cancelState: {
+            isActive: cancellation.isActive,
+            isCancelling: cancellation.isCancelling,
+            runningTools: cancellation.runningTools,
+            activeChildren: cancellation.activeChildren,
+        },
+        requestCancel: cancellation.requestCancel,
+        handleCancelEvent: cancellation.handleEvent,
     };
 };

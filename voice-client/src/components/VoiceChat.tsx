@@ -1,14 +1,17 @@
 // components/VoiceChat.tsx
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
     makeStyles,
     tokens
 } from '@fluentui/react-components';
 import { useVoiceChat } from '../hooks/useVoiceChat';
+import { useAmplifierEvents } from '../hooks/useAmplifierEvents';
 import { ControlsPanel } from './ControlsPanel';
 import { TranscriptDisplay } from './TranscriptDisplay';
 import { SessionPicker } from './SessionPicker';
 import { ConnectionExperimentPanel } from './ConnectionExperimentPanel';
+import { MicrophoneControls } from './MicrophoneControls';
+import { StopButton } from './StopButton';
 
 const useStyles = makeStyles({
     wrapper: {
@@ -50,9 +53,15 @@ const useStyles = makeStyles({
     connectionStatus: {
         fontSize: tokens.fontSizeBase200,
         fontFamily: 'monospace',
+        marginLeft: 'auto',
+        display: 'flex',
+        gap: tokens.spacingHorizontalS,
+        alignItems: 'center',
+    },
+    statusBadge: {
         padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalS}`,
         borderRadius: tokens.borderRadiusSmall,
-        marginLeft: 'auto',
+        fontSize: tokens.fontSizeBase200,
     },
     statusConnected: {
         backgroundColor: tokens.colorPaletteGreenBackground2,
@@ -65,6 +74,10 @@ const useStyles = makeStyles({
     statusConnecting: {
         backgroundColor: tokens.colorPaletteYellowBackground2,
         color: tokens.colorPaletteYellowForeground2,
+    },
+    statusDegraded: {
+        backgroundColor: tokens.colorPaletteMarigoldBackground2,
+        color: tokens.colorPaletteMarigoldForeground2,
     },
     errorBanner: {
         backgroundColor: tokens.colorPaletteRedBackground1,
@@ -97,12 +110,21 @@ export const VoiceChat: React.FC = () => {
         connectionError,
         connectionState,
         dataChannelState,
+        // Server health (separate from WebRTC)
+        serverStatus,
         transcripts, 
         audioRef, 
         sessionId,
         startVoiceChat, 
         resumeVoiceChat,
         disconnectVoiceChat,
+        // Microphone control
+        micState,
+        toggleMute,
+        pauseReplies,
+        resumeReplies,
+        triggerResponse,
+        assistantName,
         // Health monitoring
         healthStatus,
         sessionDuration,
@@ -114,7 +136,22 @@ export const VoiceChat: React.FC = () => {
         eventLog,
         reconnectionConfig,
         setReconnectionConfig,
+        // Cancellation
+        cancelState,
+        requestCancel,
+        handleCancelEvent,
     } = useVoiceChat();
+
+    // Connect SSE events to cancellation handler
+    // This allows the UI to track tool execution state from Amplifier events
+    useAmplifierEvents({
+        autoConnect: true,
+        logToConsole: true,
+        onEvent: (event) => {
+            // Pass relevant events to cancellation handler
+            handleCancelEvent(event);
+        },
+    });
 
     const handleSessionSelect = async (selectedSessionId: string, isResume: boolean) => {
         if (isResume) {
@@ -147,16 +184,38 @@ export const VoiceChat: React.FC = () => {
                             Session: {sessionId.slice(0, 8)}...
                         </span>
                     )}
-                    <span className={`${styles.connectionStatus} ${
-                        connected ? styles.statusConnected : 
-                        connecting ? styles.statusConnecting : 
-                        styles.statusDisconnected
-                    }`}>
-                        {connected ? `✓ ${connectionState}` : 
-                         connecting ? '⟳ connecting...' : 
-                         `○ ${connectionState || 'disconnected'}`}
-                        {dataChannelState && ` | dc:${dataChannelState}`}
-                    </span>
+                    <div className={styles.connectionStatus}>
+                        {/* Voice (WebRTC) connection status */}
+                        <span 
+                            className={`${styles.statusBadge} ${
+                                connected ? styles.statusConnected : 
+                                connecting ? styles.statusConnecting : 
+                                styles.statusDisconnected
+                            }`}
+                            title={`Voice: ${connectionState || 'disconnected'}${dataChannelState ? ` | dc:${dataChannelState}` : ''}`}
+                        >
+                            {connected ? '🎤 Voice' : 
+                             connecting ? '↻ Voice...' : 
+                             '○ Voice'}
+                        </span>
+                        {/* Server connection status */}
+                        <span 
+                            className={`${styles.statusBadge} ${
+                                serverStatus === 'connected' ? styles.statusConnected :
+                                serverStatus === 'checking' ? styles.statusConnecting :
+                                styles.statusDegraded
+                            }`}
+                            title={serverStatus === 'connected' 
+                                ? 'Server connected - tools available' 
+                                : serverStatus === 'checking'
+                                ? 'Checking server...'
+                                : 'Server unreachable - voice works but tools unavailable'}
+                        >
+                            {serverStatus === 'connected' ? '⚡ Tools' :
+                             serverStatus === 'checking' ? '↻ Tools...' :
+                             '⚠ Tools'}
+                        </span>
+                    </div>
                 </div>
                 
                 {/* Error banner */}
@@ -176,6 +235,32 @@ export const VoiceChat: React.FC = () => {
                         onStart={startVoiceChat}
                         onDisconnect={disconnectVoiceChat}
                     />
+                    
+                    {/* Stop Button for cancelling operations */}
+                    {connected && (
+                        <div style={{ marginTop: tokens.spacingVerticalS }}>
+                            <StopButton
+                                isActive={cancelState.isActive}
+                                isCancelling={cancelState.isCancelling}
+                                runningTools={cancelState.runningTools}
+                                activeChildren={cancelState.activeChildren}
+                                onCancel={requestCancel}
+                            />
+                        </div>
+                    )}
+                    
+                    {/* Microphone Controls (mute, pause replies) */}
+                    <div style={{ marginTop: tokens.spacingVerticalM }}>
+                        <MicrophoneControls
+                            micState={micState}
+                            connected={connected}
+                            assistantName={assistantName}
+                            onToggleMute={toggleMute}
+                            onPauseReplies={pauseReplies}
+                            onResumeReplies={resumeReplies}
+                            onTriggerResponse={triggerResponse}
+                        />
+                    </div>
                     
                     {/* Connection Health Experiment Panel */}
                     <div style={{ marginTop: tokens.spacingVerticalM }}>

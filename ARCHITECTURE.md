@@ -141,7 +141,7 @@ Browser Audio        OpenAI Realtime          Backend            Amplifier Tools
 # Server startup
 from amplifier_foundation.bundle import load_bundle
 
-bundle = await load_bundle("exp-amplifier-dev")
+bundle = await load_bundle("amplifier-dev")
 prepared = await bundle.prepare()
 session = await prepared.create_session(session_cwd=cwd)
 

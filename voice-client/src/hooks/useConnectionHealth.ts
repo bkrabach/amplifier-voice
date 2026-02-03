@@ -93,12 +93,21 @@ export function useConnectionHealth(
         ...initialReconnectionConfig,
     });
 
+    // Track last logged status to avoid repeated logs
+    const lastLoggedStatusRef = useRef<HealthStatus | null>(null);
+    const lastStaleWarningRef = useRef<number>(0);
+    const STALE_WARNING_INTERVAL = 30000; // Only log stale warnings every 30s
+
     // Initialize manager
     useEffect(() => {
         const manager = createHealthManager(healthConfig, {
             onHealthStatusChange: (status) => {
                 setHealthStatus(status);
-                console.log(`[useConnectionHealth] Health status: ${status}`);
+                // Only log status changes, not repeated same status
+                if (status !== lastLoggedStatusRef.current) {
+                    console.log(`[useConnectionHealth] Health status: ${status}`);
+                    lastLoggedStatusRef.current = status;
+                }
             },
             onDisconnectDetected: (reason, newMetrics) => {
                 setMetrics({ ...newMetrics });
@@ -108,10 +117,16 @@ export function useConnectionHealth(
                 console.warn(`[useConnectionHealth] Session limit warning: ${Math.round(remainingMs / 1000)}s remaining`);
             },
             onIdleWarning: (idleMs) => {
-                console.warn(`[useConnectionHealth] Idle warning: ${Math.round(idleMs / 1000)}s idle`);
+                // Idle warnings are less critical, log at debug level
+                console.debug(`[useConnectionHealth] Idle: ${Math.round(idleMs / 1000)}s`);
             },
             onStaleConnection: (timeSinceLastEventMs) => {
-                console.warn(`[useConnectionHealth] Stale connection: no events for ${Math.round(timeSinceLastEventMs / 1000)}s`);
+                // Rate-limit stale connection warnings
+                const now = Date.now();
+                if (now - lastStaleWarningRef.current > STALE_WARNING_INTERVAL) {
+                    console.warn(`[useConnectionHealth] Stale connection: no events for ${Math.round(timeSinceLastEventMs / 1000)}s`);
+                    lastStaleWarningRef.current = now;
+                }
             },
         });
         
