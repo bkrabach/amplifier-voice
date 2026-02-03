@@ -224,11 +224,16 @@ export const useVoiceChat = () => {
                 const event = JSON.parse(data) as VoiceChatEvent;
 
                 // Check for function call events (voice control tools)
-                if (event.type === 'response.function_call_arguments.done') {
-                    const fnEvent = event as { name?: string; call_id?: string };
-                    if (fnEvent.name && fnEvent.call_id && CLIENT_SIDE_TOOLS.has(fnEvent.name)) {
-                        handleVoiceControlTool(fnEvent.name, fnEvent.call_id, dataChannel);
-                        // Still pass to handleEvent for UI updates
+                // Handle client-side and DON'T pass to handleEvent (which would try to execute via Amplifier)
+                if (event.type === 'response.output_item.added' || event.type === 'response.output_item.done') {
+                    const itemEvent = event as { item?: { type?: string; name?: string; call_id?: string } };
+                    if (itemEvent.item?.type === 'function_call' && itemEvent.item?.name && CLIENT_SIDE_TOOLS.has(itemEvent.item.name)) {
+                        if (event.type === 'response.output_item.added') {
+                            // Execute the client-side tool when the item is added
+                            handleVoiceControlTool(itemEvent.item.name, itemEvent.item.call_id || '', dataChannel);
+                        }
+                        // Skip passing to handleEvent - we handled it client-side
+                        return;
                     }
                 }
 
@@ -240,7 +245,7 @@ export const useVoiceChat = () => {
                     }
                 }
 
-                // Pass all events to the regular handler
+                // Pass all other events to the regular handler
                 handleEvent(event, dataChannel);
             } catch (err) {
                 console.debug('Error parsing event:', err);
