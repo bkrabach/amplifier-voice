@@ -68,22 +68,40 @@ export const useVoiceChat = () => {
     // Track data channel for microphone control
     const dataChannelRef = useRef<RTCDataChannel | null>(null);
 
+    // Helper to trigger a response via data channel (for voice keyword handlers)
+    const triggerResponseViaDataChannel = useCallback(() => {
+        const dc = dataChannelRef.current;
+        if (dc && dc.readyState === 'open') {
+            dc.send(JSON.stringify({ type: 'response.create' }));
+            console.log('[VoiceChat] Triggered response via data channel');
+        }
+    }, []);
+
     // Voice keyword detection
     const voiceKeywords = useVoiceKeywords(
         {
             onPauseReplies: () => {
                 console.log('[VoiceChat] Voice keyword: pause replies');
                 micControl.pauseReplies();
+                addSystemMessage('Replies paused - still listening', '⏸️');
+                // Note: For pause via keyword, we don't trigger a response 
+                // because the user explicitly wants silence
             },
             onResumeReplies: () => {
                 console.log('[VoiceChat] Voice keyword: resume replies');
                 micControl.resumeReplies();
+                addSystemMessage('Replies resumed', '▶️');
+                // Trigger a response so the model acknowledges the resume
+                triggerResponseViaDataChannel();
             },
             onRespondNow: () => {
                 console.log('[VoiceChat] Voice keyword: respond now');
                 micControl.triggerResponse();
                 // Also resume replies when responding
-                micControl.resumeReplies();
+                if (micControl.micState === 'paused') {
+                    micControl.resumeReplies();
+                    addSystemMessage('Replies resumed', '▶️');
+                }
             },
             onMute: () => {
                 console.log('[VoiceChat] Voice keyword: mute');
