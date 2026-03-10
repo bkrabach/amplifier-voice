@@ -17,7 +17,7 @@ from contextlib import asynccontextmanager, AsyncExitStack
 
 from fastapi import FastAPI, Request, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
 from . import settings
 from .amplifier_bridge import (
@@ -101,9 +101,15 @@ def service_init(app: FastAPI, register_lifespan_handler: Callable):
         Exchange SDP for WebRTC connection.
 
         Requires Authorization header with ephemeral token from /session.
+        Returns SDP answer with X-Call-Id header containing the call ID.
         """
         offer_sdp = await request.body()
-        return await exchange_realtime_sdp(offer_sdp, authorization)
+        result = await exchange_realtime_sdp(offer_sdp, authorization)
+        return Response(
+            content=result["sdp"],
+            media_type="application/sdp",
+            headers={"X-Call-Id": result["call_id"]},
+        )
 
     @app.post("/execute/{tool_name}")
     async def handle_tool_call(tool_name: str, arguments: dict) -> Dict[str, Any]:

@@ -18,7 +18,7 @@ import httpx
 import logging
 from typing import Dict, Any
 
-from fastapi import HTTPException, Response
+from fastapi import HTTPException
 
 from . import settings
 from .amplifier_bridge import AmplifierBridge
@@ -84,15 +84,17 @@ async def create_realtime_session(
 
     response_data = resp.json()
     client_secret = response_data.get("value", "unknown")
+    session_id = response_data.get("id", "unknown")
     logger.info(f"Session created with client secret: {client_secret[:20]}...")
+    logger.info(f"Session ID: {session_id}")
 
     # Transform response to match client expectations
-    # OpenAI returns: { "value": "ek_..." }
-    # Client expects: { "client_secret": { "value": "ek_..." } }
-    return {"client_secret": {"value": client_secret}}
+    # OpenAI returns: { "value": "ek_...", "id": "sess_..." }
+    # Client expects: { "client_secret": { "value": "ek_..." }, "session_id": "sess_..." }
+    return {"client_secret": {"value": client_secret}, "session_id": session_id}
 
 
-async def exchange_realtime_sdp(offer_sdp: bytes, authorization: str) -> Response:
+async def exchange_realtime_sdp(offer_sdp: bytes, authorization: str) -> Dict[str, Any]:
     """
     Exchange SDP with OpenAI for WebRTC connection (GA API).
 
@@ -103,7 +105,7 @@ async def exchange_realtime_sdp(offer_sdp: bytes, authorization: str) -> Respons
         authorization: Bearer token from client secret
 
     Returns:
-        SDP answer from OpenAI
+        Dict with "sdp" (SDP answer text) and "call_id" (from Location header)
     """
     headers = {"Authorization": authorization, "Content-Type": "application/sdp"}
 
@@ -119,5 +121,9 @@ async def exchange_realtime_sdp(offer_sdp: bytes, authorization: str) -> Respons
     # GA API returns raw SDP
     sdp_content = resp.text
 
-    logger.info("SDP exchange successful")
-    return Response(content=sdp_content, media_type="application/sdp")
+    # Extract call_id from Location header: https://api.openai.com/v1/realtime/calls/{call_id}
+    location = resp.headers.get("location", "")
+    call_id = location.split("/")[-1] if location else ""
+    logger.info(f"SDP exchange successful, call_id: {call_id}")
+
+    return {"sdp": sdp_content, "call_id": call_id}
