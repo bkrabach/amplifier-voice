@@ -18,13 +18,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-logger = logging.getLogger(__name__)
-
 # Event streaming for debugging
 from voice_server.protocols.event_streaming import (
     EventStreamingHook,
     EVENTS_TO_CAPTURE,
 )
+from voice_server.tools.dispatch_tool import DISPATCH_TOOL_DEFINITION
+
+logger = logging.getLogger(__name__)
 
 
 def _make_json_safe(obj: Any) -> Any:
@@ -704,41 +705,6 @@ class AmplifierBridge:
         },
     }
 
-    # Voice control tools - handled client-side, not server-side
-    # These allow the voice model to control microphone state
-    VOICE_CONTROL_TOOLS = [
-        {
-            "type": "function",
-            "name": "pause_replies",
-            "description": (
-                "Pause automatic replies - continue hearing and transcribing the user's speech, "
-                "but don't respond automatically. Use when the user wants to talk without "
-                "interruption, have a side conversation you should follow, or discuss "
-                "something at length before getting your input. The user can say "
-                "'respond now' or 'go ahead' to trigger a response, or click a button."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {},
-                "required": [],
-            },
-        },
-        {
-            "type": "function",
-            "name": "resume_replies",
-            "description": (
-                "Resume automatic replies and return to normal conversation where you respond "
-                "to speech automatically. Use when the user indicates they're ready for "
-                "normal back-and-forth conversation again."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {},
-                "required": [],
-            },
-        },
-    ]
-
     def get_tools_for_openai(self) -> List[Dict[str, Any]]:
         """
         Convert Amplifier tools to OpenAI function format.
@@ -747,7 +713,8 @@ class AmplifierBridge:
         actual work to agents via the task tool. All tools remain available
         internally for agent execution.
 
-        Also includes VOICE_CONTROL_TOOLS for client-side microphone control.
+        Also includes the dispatch tool (async fire-and-forget delegation) and
+        the cancellation tool (server-side).
 
         Returns list of function definitions ready for OpenAI API.
         Ensures all schemas are JSON-safe for OpenAI.
@@ -770,8 +737,8 @@ class AmplifierBridge:
             }
             openai_tools.append(tool_def)
 
-        # Add voice control tools (handled client-side)
-        openai_tools.extend(self.VOICE_CONTROL_TOOLS)
+        # Add dispatch tool (async fire-and-forget delegation)
+        openai_tools.append(DISPATCH_TOOL_DEFINITION)
 
         # Add cancellation tool (handled server-side)
         openai_tools.append(self.CANCEL_TOOL)

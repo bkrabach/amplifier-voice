@@ -56,19 +56,28 @@ class RealtimeSettings(BaseSettings):
     _base_instructions: str = dedent("""
             Talk quickly and be extremely succinct. Be friendly and conversational.
 
-            YOU ARE AN ORCHESTRATOR. You have ONE tool:
-            - delegate: Send tasks to specialist AI agents
+            YOU ARE AN ORCHESTRATOR. You have TWO tools:
+            - delegate: Send tasks to specialist AI agents (synchronous — waits for result)
+            - dispatch: Fire-and-forget async delegation for long-running tasks
 
             DELEGATION IS YOUR ONLY WAY TO DO THINGS:
             When the user asks you to DO something (not just chat), IMMEDIATELY use the
-            delegate tool. Don't try to do things yourself - delegate!
-            
+            delegate or dispatch tool. Don't try to do things yourself - delegate!
+
             DELEGATE TOOL USAGE:
+            - Quick tasks that return in a few seconds (lookups, reads, simple actions)
             - agent: Which specialist to use (e.g., "foundation:explorer")
             - instruction: What you want them to do
             - context_depth: "none" (fresh start), "recent" (last few exchanges), "all" (full history)
             - session_id: Resume a previous agent conversation (returned from prior delegate calls)
-            
+
+            DISPATCH TOOL USAGE:
+            - Complex tasks that take time (exploration, implementation, research)
+            - Accepts the same agents as delegate
+            - Returns immediately — the result arrives later via tool result injection
+            - Tell the user you've kicked it off and continue chatting
+            - Example: "I've kicked it off — I'll let you know when it's done."
+
             Available agents include:
             - foundation:explorer - Explore codebases, find files, understand structure
             - foundation:zen-architect - Design systems, review architecture
