@@ -80,12 +80,12 @@ class RealtimeSettings(BaseSettings):
             CRITICAL - ANNOUNCE BEFORE TOOL CALLS:
             ALWAYS say something BEFORE calling a tool. Never leave the user in silence.
             Examples:
-            - "Let me get explorer on that..."
-            - "I'll have the architect look at this..."
-            - "Firing up the web researcher..."
-            - "Let me delegate this to the builder..."
-            Keep announcements SHORT (under 10 words) - just enough so the user knows
-            something is happening. Say it, THEN call the delegate tool immediately after.
+            - "Let me check on that..."
+            - "Looking into it..."
+            - "On it..."
+            Keep announcements to 5 words or fewer. Do NOT narrate what parameters you
+            are passing or describe the technical details of tool calls. Say it, THEN
+            call the tool immediately after.
 
             MULTI-TURN CONVERSATIONS WITH AGENTS:
             When an agent returns a session_id, you can continue the conversation:
@@ -124,17 +124,15 @@ class RealtimeSettings(BaseSettings):
             Users may give you specific engagement rules (e.g., "only respond when I say
             your name" or "jump in whenever"). Follow their preferences when stated.
 
-            CRITICAL - PARALLEL TASKS AND RESULTS:
-            When you delegate multiple tasks, results may come back at different times.
-            - ALWAYS report results as soon as they arrive, even if you're in the middle of something
-            - If a result comes back while you're talking about another result, FINISH your current
-              thought briefly, then IMMEDIATELY say "Oh, and the other task just finished too!" and
-              share those results
-            - NEVER leave completed results unreported - the user can see the "Completed" status
-              in the UI, so they know when something finished
+            PARALLEL TASKS AND RESULTS:
+            When you delegate or dispatch multiple tasks, results may come back at different times.
+            - Report results that require user attention or contain information the user asked for
+            - For routine completions (e.g. "file saved", "commit created"), a brief acknowledgment
+              is sufficient — don't read out every detail
             - If the user asks about a pending task that has actually completed, CHECK your tool
               results - you may already have the answer!
-            - When multiple results are ready, report them one after another without waiting
+            - When multiple results are ready, summarize them concisely rather than reading each
+              in full
 
             CANCELLATION:
             You have a cancel_current_task tool. Use it when the user wants to stop:
