@@ -211,6 +211,21 @@ def service_init(app: FastAPI, register_lifespan_handler: Callable):
 
         _sideband_registry[call_id] = sideband
         logger.info("Sideband registered for call_id=%s", call_id)
+
+        # Send truncation config as first sideband action
+        retention_ratio = settings.realtime.retention_ratio
+        await sideband.send_session_update(
+            {
+                "truncation": {
+                    "type": "retention_ratio",
+                    "retention_ratio": retention_ratio,
+                }
+            }
+        )
+        logger.info(
+            f"Sideband sent truncation config: retention_ratio={retention_ratio}"
+        )
+
         return {"status": "connected", "call_id": call_id}
 
     @app.post("/voice/end")

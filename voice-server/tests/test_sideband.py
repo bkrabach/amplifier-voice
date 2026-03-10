@@ -285,6 +285,35 @@ class TestVoiceSidebandDispatchRouting:
         await sb.disconnect()
 
 
+class TestVoiceSidebandTruncationConfig:
+    """Truncation config is sent as a session.update on sideband connect."""
+
+    @pytest.mark.asyncio
+    async def test_send_truncation_config(self):
+        """send_session_update with truncation config sends the correct session.update shape."""
+        sb, bridge, fake_ws = make_sideband()
+
+        # Manually wire up connected state
+        sb._ws = fake_ws
+        sb.is_connected = True
+
+        retention_ratio = 0.8
+        await sb.send_session_update(
+            {
+                "truncation": {
+                    "type": "retention_ratio",
+                    "retention_ratio": retention_ratio,
+                }
+            }
+        )
+
+        assert len(fake_ws.sent) == 1
+        msg = json.loads(fake_ws.sent[0])
+        assert msg["type"] == "session.update"
+        assert msg["session"]["truncation"]["type"] == "retention_ratio"
+        assert msg["session"]["truncation"]["retention_ratio"] == retention_ratio
+
+
 class TestVoiceSidebandDisconnect:
     """disconnect cleans up state."""
 

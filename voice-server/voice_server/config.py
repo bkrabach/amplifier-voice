@@ -50,6 +50,12 @@ class RealtimeSettings(BaseSettings):
     # Assistant name (injected into instructions at runtime)
     name: str = assistant_name
 
+    # Retention ratio for automatic context truncation (0.0 to 1.0)
+    # When context fills up, drops the oldest (1 - ratio) portion in one chunk.
+    # Chunked dropping is cache-friendly — stable prefixes get more cache hits.
+    # Set via RETENTION_RATIO env var. Default 0.8 = drop oldest 20% at a time.
+    retention_ratio: float = float(os.environ.get("RETENTION_RATIO", "0.8"))
+
     # Base system instructions (without identity - that's injected dynamically)
     # Note: Voice, turn_detection, and transcription are configured via client-side
     # session.update after WebRTC connection (GA API restriction)
