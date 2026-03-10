@@ -174,3 +174,20 @@ class TestExchangeRealtimeSdp:
             result = await exchange_realtime_sdp(b"offer", "Bearer ek_test")
 
         assert set(result.keys()) == {"sdp", "call_id"}
+
+    @pytest.mark.asyncio
+    async def test_accepts_201_status_code(self):
+        """SDP exchange accepts 201 status code (OpenAI returns 201, not 200)."""
+        location = "https://api.openai.com/v1/realtime/calls/call_test"
+        sdp_answer = "v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\n"
+        fake_resp = make_httpx_response(
+            status_code=201,
+            text=sdp_answer,
+            headers={"location": location},
+        )
+
+        with patch_httpx_post(fake_resp):
+            result = await exchange_realtime_sdp(b"offer", "Bearer ek_test")
+
+        assert result["sdp"] == sdp_answer
+        assert result["call_id"] == "call_test"
