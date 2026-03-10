@@ -14,8 +14,10 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
+import { voiceConfig } from '../config/voiceConfig';
 
-const API_BASE = 'http://localhost:8080';
+// API base URL — centralised via voiceConfig / VITE_SERVER_URL
+const API_BASE = voiceConfig.serverUrl;
 
 // Rate limiting for connection errors to reduce console noise
 let lastErrorLogTime = 0;

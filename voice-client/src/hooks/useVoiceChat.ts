@@ -50,7 +50,7 @@ export const useVoiceChat = () => {
 
     // Cancellation state and controls
     const cancellation = useCancellation({
-        serverUrl: 'http://localhost:8080',
+        serverUrl: voiceConfig.serverUrl,
         onCancelComplete: () => {
             console.log('[VoiceChat] Cancellation completed');
         },

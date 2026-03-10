@@ -1,5 +1,6 @@
 // hooks/useCancellation.ts
 import { useState, useCallback, useEffect, useRef } from 'react';
+import { voiceConfig } from '../config/voiceConfig';
 
 interface CancellationState {
     /** Whether there are operations that can be cancelled */
@@ -21,7 +22,8 @@ interface UseCancellationOptions {
     onCancelComplete?: () => void;
 }
 
-const DEFAULT_SERVER_URL = 'http://localhost:8080';
+// Default server URL — centralised via voiceConfig / VITE_SERVER_URL
+const DEFAULT_SERVER_URL = voiceConfig.serverUrl;
 
 export function useCancellation(options: UseCancellationOptions = {}) {
     const { serverUrl = DEFAULT_SERVER_URL, onCancelComplete } = options;

@@ -6,9 +6,10 @@
  */
 
 import { create } from 'zustand';
+import { voiceConfig } from '../config/voiceConfig';
 
-// API base URL (voice server)
-const API_BASE = 'http://localhost:8080';
+// API base URL (voice server) — centralised via voiceConfig / VITE_SERVER_URL
+const API_BASE = voiceConfig.serverUrl;
 
 export interface TranscriptEntry {
   id: string;

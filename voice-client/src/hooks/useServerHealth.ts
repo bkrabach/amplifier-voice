@@ -7,8 +7,10 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { voiceConfig } from '../config/voiceConfig';
 
-const BASE_URL = 'http://127.0.0.1:8080';
+// Base URL — centralised via voiceConfig / VITE_SERVER_URL
+const BASE_URL = voiceConfig.serverUrl;
 
 export type ServerStatus = 'connected' | 'disconnected' | 'checking';
 
