@@ -43,6 +43,7 @@ export const useWebRTC = () => {
     const pcRef = useRef<RTCPeerConnection | null>(null);
     const streamRef = useRef<MediaStream | null>(null);
     const dataChannelRef = useRef<RTCDataChannel | null>(null);
+    const callIdRef = useRef<string>('');
 
     // Store health callbacks ref so they can be called throughout the connection lifecycle
     const healthCallbacksRef = useRef<WebRTCHealthCallbacks>({});
@@ -306,6 +307,10 @@ export const useWebRTC = () => {
                 throw new Error(`SDP exchange failed: ${sdpResponse.statusText}`);
             }
 
+            // Extract call_id from response header (set by server during SDP exchange)
+            const callId = sdpResponse.headers.get('X-Call-Id') || '';
+            callIdRef.current = callId;
+
             // Parse SDP answer
             const sdpText = await sdpResponse.text();
             let answerSdp: string;
@@ -327,6 +332,26 @@ export const useWebRTC = () => {
             console.log('[WebRTC] Connected successfully');
             console.log('[WebRTC] Session started at:', new Date().toISOString());
 
+            // Connect server-side sideband (non-blocking)
+            // The sideband handles all tool execution server-side
+            if (callId && ephemeralToken) {
+                fetch(`${BASE_URL}/voice/sideband`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ call_id: callId, ephemeral_key: ephemeralToken }),
+                }).then(res => {
+                    if (res.ok) {
+                        console.log('[WebRTC] Sideband connected for call_id:', callId);
+                    } else {
+                        console.warn('[WebRTC] Sideband connection failed:', res.statusText);
+                    }
+                }).catch(err => {
+                    console.warn('[WebRTC] Sideband connection error:', err);
+                });
+            } else {
+                console.warn('[WebRTC] No call_id or ephemeral token — sideband not connected');
+            }
+
         } catch (err) {
             const error = err instanceof Error ? err.message : 'Connection failed';
             console.error('WebRTC connection error:', err);
@@ -338,6 +363,20 @@ export const useWebRTC = () => {
 
     const disconnect = useCallback(() => {
         healthCallbacksRef.current.onDisconnect?.('user_initiated');
+
+        // Notify server the call has ended (fire-and-forget)
+        const callId = callIdRef.current;
+        if (callId) {
+            fetch(`${BASE_URL}/voice/end`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ call_id: callId }),
+            }).catch(err => {
+                console.warn('[WebRTC] Failed to notify /voice/end:', err);
+            });
+            callIdRef.current = '';
+        }
+
         cleanup();
         setState({ connected: false, connecting: false, error: null, connectionState: 'closed', dataChannelState: 'closed' });
         console.log('[WebRTC] Disconnected by user');
