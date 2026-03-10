@@ -3,56 +3,54 @@
 ## Overview
 
 Amplifier Voice is a real-time voice assistant that combines:
-- **OpenAI gpt-realtime** model for voice I/O (speech-to-speech)
+- **OpenAI gpt-realtime-1.5** model for voice I/O (speech-to-speech)
 - **Microsoft Amplifier** (programmatic) for tool execution
 - **WebRTC** for browser-based audio streaming
+- **Server-side sideband WebSocket** for intercepting and executing all tool calls
 
 ## Architecture Diagram
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│                    Browser Client                            │
-│  - React UI                                                  │
-│  - WebRTC audio (24kHz PCM)                                 │
-│  - Microphone input → Speaker output                        │
-└────────────┬─────────────────────────────────────────────────┘
-             │ WebRTC (SDP exchange)
-             ▼
-┌──────────────────────────────────────────────────────────────┐
-│              FastAPI Backend (voice-server)                  │
-│                                                              │
-│  ┌────────────────────────────────────────────────┐         │
-│  │  Session Endpoint (/session)                   │         │
-│  │  - Creates OpenAI Realtime session             │         │
-│  │  - Configures tools from Amplifier             │         │
-│  │  - Returns ephemeral client_secret             │         │
-│  └────────────────────────────────────────────────┘         │
-│                                                              │
-│  ┌────────────────────────────────────────────────┐         │
-│  │  SDP Endpoint (/sdp)                           │         │
-│  │  - Exchanges WebRTC SDP with OpenAI            │         │
-│  │  - Establishes audio connection                │         │
-│  └────────────────────────────────────────────────┘         │
-│                                                              │
-│  ┌────────────────────────────────────────────────┐         │
-│  │  AmplifierBridge (Long-lived)                  │         │
-│  │  - Programmatic foundation integration         │         │
-│  │  - Single session for server lifetime          │         │
-│  │  - Direct coordinator.call_tool()              │         │
-│  │  - No subprocess overhead                      │         │
-│  └────────────────────────────────────────────────┘         │
-└──────────┬───────────────────────────┬───────────────────────┘
-           │                           │
-           │ HTTPS REST                │ Direct Python calls
-           ▼                           ▼
-┌──────────────────────┐    ┌──────────────────────────┐
-│  OpenAI Realtime API │    │  Amplifier Foundation    │
-│  - gpt-realtime      │    │  - Bundle loading        │
-│  - Voice I/O         │    │  - Tool mounting         │
-│  - Function calling  │    │  - Session management    │
-│  - 32K context       │    │  - Coordinator           │
-│  - Prompt caching    │    └──────────────────────────┘
-└──────────────────────┘
+Browser Client (React UI)
+  - Pure audio transport (no tool execution in client)
+  - Microphone input / Speaker output
+  |
+  | WebRTC (direct to OpenAI -- audio ONLY)
+  |
+  v
+OpenAI Realtime API (gpt-realtime-1.5)
+  - Voice I/O + function calling
+  - 32K context, prompt caching
+  - Audio streams directly to/from browser
+  - Tool calls routed to sideband WebSocket
+  ^
+  |
+  | Sideband WebSocket (server-side control plane)
+  |
+FastAPI Backend (voice-server)
+  +-- Session + SDP Endpoints
+  |     /session  -- create session, return secret
+  |     /sdp      -- exchange SDP, return X-Call-Id header
+  |
+  +-- Sideband Control Plane
+  |     /voice/sideband  -- connect sideband WS to OpenAI session
+  |     /voice/end       -- cleanup session resources
+  |     Intercepts ALL tool calls server-side
+  |     Sends retention_ratio truncation config on connect
+  |     Injects tool results back into session
+  |
+  +-- AmplifierBridge (long-lived)
+  |     Programmatic foundation integration
+  |     Single session for server lifetime
+  |     Direct coordinator.call_tool()
+  |
+  | Direct Python calls
+  v
+Amplifier Foundation
+  - Bundle loading + tool mounting
+  - Session management + coordinator
+  - delegate tool (sync) + dispatch tool (async)
+  - Specialist agents via Anthropic Claude
 ```
 
 ## Data Flow
@@ -90,29 +88,66 @@ Client                Backend              OpenAI
   │◀════WebRTC Audio════════════════════════▶
 ```
 
-### 3. Voice Conversation with Tool Calls
+### 3. Sideband Connection
 
 ```
-Browser Audio        OpenAI Realtime          Backend            Amplifier Tools
-     │                     │                      │                     │
-     │──Audio chunks──────▶│                      │                     │
-     │                     │──VAD detects turn────▶                     │
-     │                     │──LLM processes───────▶                     │
-     │                     │                      │                     │
-     │                     │──function_call.done──▶                     │
-     │                     │                      │                     │
-     │                     │                      │──execute_tool()────▶│
-     │                     │                      │◀─result────────────┘
-     │                     │◀─function_output─────┘                     │
-     │                     │                      │                     │
-     │◀─Audio response─────┘                      │                     │
+Client                Backend              OpenAI
+  │                      │                   │
+  │  (after WebRTC connected)               │
+  │──POST /voice/sideband──▶│               │
+  │   {call_id, session_id} │               │
+  │                      │──WSS connect────▶│
+  │                      │   (sideband WS)  │
+  │                      │──session.update──▶│
+  │                      │   (retention_ratio truncation)
+  │◀─{status: "connected"}──┘               │
+```
+
+### 4. Voice Conversation with Tool Calls (via Sideband)
+
+```
+Browser Audio        OpenAI Realtime       Sideband (Backend)    Amplifier
+     │                     │                      │                  │
+     │──Audio chunks──────▶│                      │                  │
+     │                     │──VAD detects turn───▶│                  │
+     │                     │──LLM processes──────▶│                  │
+     │                     │                      │                  │
+     │                     │──function_call.done─▶│                  │
+     │                     │   (via sideband WS)  │                  │
+     │                     │                      │──call_tool()────▶│
+     │                     │                      │◀─result──────────┘
+     │                     │◀─function_output─────┘                  │
+     │                     │   (injected via WS)  │                  │
+     │◀─Audio response─────┘                      │                  │
+```
+
+**Key difference from old architecture**: The browser never sees tool calls. All tool
+execution is handled server-side via the sideband WebSocket. The browser is a pure
+audio transport.
+
+### 5. Async Dispatch (Fire-and-Forget)
+
+```
+Browser Audio        OpenAI Realtime       Sideband (Backend)    Amplifier
+     │                     │                      │                  │
+     │──"Research Tesla"──▶│                      │                  │
+     │                     │──dispatch call──────▶│                  │
+     │                     │                      │──background task─▶│
+     │                     │◀─"Working on it"─────┘                  │
+     │◀─Audio: "Dispatched"┘                      │                  │
+     │                     │                      │                  │
+     │──"What else..."────▶│  (user keeps talking)│                  │
+     │◀─Audio response─────┘                      │                  │
+     │                     │                      │◀─result──────────┘
+     │                     │◀─inject result───────┘  (when done)     │
+     │◀─Audio: "Done!"─────┘                      │                  │
 ```
 
 ## Key Components
 
-### OpenAI Realtime API (gpt-realtime)
+### OpenAI Realtime API (gpt-realtime-1.5)
 
-**Model**: `gpt-realtime` (GA, August 2025)
+**Model**: `gpt-realtime-1.5` (GA)
 
 **Capabilities**:
 - Native speech-to-speech (no STT→LLM→TTS pipeline)
@@ -160,10 +195,11 @@ result = await tool_mount.call(**arguments)
 - Direct Python API calls
 - All amplifier-dev tools available (~13+ tools)
 
-**Available Tool**:
-- `tool-delegate` - Spawn specialist agents (the ONLY tool exposed to voice model)
+**Available Tools** (exposed to voice model):
+- `delegate` — Synchronous agent delegation (quick tasks, 1-5s). Model waits for result.
+- `dispatch` — Asynchronous fire-and-forget delegation (heavy tasks, 10s-5min). Model keeps talking; result injected when done.
 
-**Available Agents** (via delegate tool):
+**Available Agents** (via delegate/dispatch tools):
 - `foundation:explorer` - Explore codebases, find files, understand structure
 - `foundation:zen-architect` - Design systems, review architecture
 - `foundation:modular-builder` - Write code, implement features
@@ -179,14 +215,16 @@ Agents run on Anthropic Claude and have access to all Amplifier tools internally
 
 **Endpoints**:
 - `GET /session` - Create Realtime session with tools
-- `POST /sdp` - Exchange WebRTC SDP
+- `POST /sdp` - Exchange WebRTC SDP (returns `X-Call-Id` header)
+- `POST /voice/sideband` - Connect server-side sideband WebSocket
+- `POST /voice/end` - End session and cleanup sideband
 - `GET /health` - Health check
 - `GET /tools` - List available tools
 
 **Lifecycle**:
 - Startup: Initialize Amplifier bridge once
-- Runtime: Serve requests, execute tools
-- Shutdown: Cleanup Amplifier resources
+- Runtime: Serve requests, manage sideband connections, execute tools
+- Shutdown: Cleanup sideband connections and Amplifier resources
 
 ### React Client
 
@@ -217,7 +255,7 @@ Agents run on Anthropic Claude and have access to all Amplifier tools internally
 + {
 +   "session": {
 +     "type": "realtime",
-+     "model": "gpt-realtime",
++     "model": "gpt-realtime-1.5",
 +     "audio": {
 +       "output": {"voice": "alloy"}
 +     },
@@ -228,7 +266,7 @@ Agents run on Anthropic Claude and have access to all Amplifier tools internally
 
 **Model**:
 - Beta: `gpt-4o-realtime-preview-2024-12-17`
-- GA: `gpt-realtime` (20% cheaper, better quality)
+- GA: `gpt-realtime-1.5` (20% cheaper, better quality)
 
 ## Cost Optimization
 
@@ -249,10 +287,18 @@ Assistant audio (10 sec): $0.64
 Total:                    ~$1.14 per exchange
 ```
 
+### Context Management — Retention Ratio Truncation
+
+The sideband automatically sends a `session.update` with `retention_ratio` on connect.
+This tells OpenAI to auto-truncate old context when the session approaches its limit,
+keeping the most recent portion of the conversation.
+
+**Configuration**: Set `RETENTION_RATIO` env var (default: `0.8`, range: 0.0–1.0)
+
 ### Cost Management Strategies
 
 1. **Session duration**: Keep conversations under 5 minutes when possible
-2. **Context rewriting**: Periodically summarize and clear old messages
+2. **Retention ratio**: Auto-truncation keeps context manageable (default: 0.8)
 3. **Tool optimization**: Only include tools likely to be used
 4. **Audio quality**: 24kHz is sufficient (don't use higher rates)
 

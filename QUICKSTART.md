@@ -21,9 +21,10 @@ OPENAI_API_KEY=sk-proj-...
 ANTHROPIC_API_KEY=sk-ant-...
 
 # Optional (defaults shown)
-VOICE_MODEL=gpt-realtime
+VOICE_MODEL=gpt-realtime-1.5
 VOICE=ash
 MAX_TURNS=10
+RETENTION_RATIO=0.8            # Auto-truncation ratio (0.0-1.0)
 ```
 
 ### 2. Install Backend Dependencies
@@ -64,7 +65,7 @@ You should see:
 ```
 INFO: Initializing Amplifier bridge...
 INFO: Adding tool-delegate module to bundle
-INFO: Amplifier bridge initialized with 1 tool (delegate)
+INFO: Amplifier bridge initialized with 2 tools (delegate, dispatch)
 INFO: Service lifespan started
 INFO: Uvicorn running on http://0.0.0.0:8080
 ```
@@ -113,16 +114,20 @@ Opens browser at `http://localhost:5173`
 ## Architecture
 
 ```
-Browser ─WebRTC─▶ FastAPI ─REST─▶ OpenAI Realtime API (voice I/O)
-                     │
-                     └────▶ Amplifier (delegate tool → specialist agents)
+Browser ←──WebRTC──→ OpenAI Realtime API (audio ONLY)
+                          ↑
+                          │ Sideband WebSocket (server-side control)
+                          │
+                     FastAPI Backend ──→ Amplifier (delegate + dispatch tools)
 ```
 
 **Key points:**
-- OpenAI Realtime handles **voice I/O** (speech recognition + synthesis)
-- Voice model has ONE tool: `delegate` - sends work to specialist agents
+- Browser is a **pure audio transport** — no tool execution in the client
+- Server opens a **sideband WebSocket** to the same OpenAI session for all control
+- Voice model has TWO tools: `delegate` (sync, quick tasks) + `dispatch` (async, heavy tasks)
+- All tool calls are intercepted and executed **server-side** via the sideband
 - Agents (explorer, architect, builder, etc.) run via Anthropic Claude
-- Backend bridges OpenAI voice + Amplifier agents via programmatic API
+- You can keep talking during `dispatch` tasks — results arrive when ready
 
 ## Troubleshooting
 
@@ -156,7 +161,7 @@ Some tools (especially web search) may take time. Default timeout is 30s. Adjust
 
 ### High costs
 
-Each voice conversation costs ~$1-2 per minute with the gpt-realtime model. Strategies:
+Each voice conversation costs ~$1-2 per minute with the gpt-realtime-1.5 model. Strategies:
 - Keep conversations under 5 minutes
 - Use cheaper models for non-voice tasks
 - Monitor usage at https://platform.openai.com/usage
@@ -182,7 +187,7 @@ cd voice-client
 ### Add New Tools
 
 The voice assistant uses the `amplifier-dev` bundle by default, which includes the
-`delegate` tool for agent orchestration. The bundle is configured in `voice_server/config.py`.
+`delegate` and `dispatch` tools for agent orchestration. The bundle is configured in `voice_server/config.py`.
 
 Available agents for delegation:
 - `foundation:explorer` - Explore codebases, find files

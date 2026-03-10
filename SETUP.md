@@ -51,19 +51,23 @@ Click "Start Voice Chat" to begin!
 1. **Client** requests session from **Server**
 2. **Server** creates OpenAI Realtime session with tools
 3. **Client** establishes WebRTC connection via SDP exchange
-4. **OpenAI** handles voice-to-text and text-to-voice
-5. **Server** executes tools via **Amplifier** when requested
-6. **Results** stream back through WebRTC data channel
+4. **Client** calls `POST /voice/sideband` with call_id for server-side control
+5. **Server** opens sideband WebSocket to the same OpenAI session
+6. **OpenAI** handles voice-to-text and text-to-voice
+7. **Server** intercepts all tool calls via the sideband and executes them via **Amplifier**
+8. **Results** are injected back into the session via the sideband WebSocket
 
 ### Amplifier Integration
 
 The server uses **AmplifierBridge** to:
-- Load the `amplifier-dev` bundle with the `delegate` tool
+- Load the `amplifier-dev` bundle with the `delegate` and `dispatch` tools
 - Spawn specialist agents (explorer, architect, builder, etc.) via Anthropic Claude
 - Execute delegated tasks with timeout and error handling
-- Convert the delegate tool definition to OpenAI function calling format
+- Convert tool definitions to OpenAI function calling format
 
-The voice model has ONE tool (`delegate`) which sends work to specialist AI agents.
+The voice model has TWO tools:
+- `delegate` — Synchronous agent delegation (quick tasks, 1-5s)
+- `dispatch` — Asynchronous fire-and-forget delegation (heavy tasks, 10s-5min; user can keep talking)
 
 ---
 
@@ -84,11 +88,14 @@ AMPLIFIER_TOOL_TIMEOUT=60.0              # Tool execution timeout (seconds)
 # Server settings
 HOST=0.0.0.0
 PORT=8080
+
+# Context management
+RETENTION_RATIO=0.8              # Auto-truncation ratio (0.0-1.0, default: 0.8)
 ```
 
 ### OpenAI Model
 
-Currently using: `gpt-realtime` (GA model with prompt caching)
+Currently using: `gpt-realtime-1.5` (GA model with prompt caching)
 
 Available voices: `alloy`, `ash`, `ballad`, `coral`, `echo`, `sage`, `shimmer`, `verse`
 
@@ -109,7 +116,7 @@ Create a new voice session with Amplifier-powered tools.
     "value": "ephemeral_token",
     "expires_at": 123456789
   },
-  "model": "gpt-4o-realtime-preview-2024-12-17",
+  "model": "gpt-realtime-1.5",
   "tools": [...]
 }
 ```
@@ -122,7 +129,28 @@ Exchange SDP for WebRTC connection.
 
 **Body:** SDP offer (application/sdp)
 
-**Response:** SDP answer
+**Response:** SDP answer + `X-Call-Id` response header (used for sideband connection)
+
+### `POST /voice/sideband`
+Connect server-side sideband WebSocket to the OpenAI session for tool call handling.
+
+**Body:**
+```json
+{
+  "call_id": "rtc_...",
+  "session_id": "sess_..."
+}
+```
+
+### `POST /voice/end`
+End a voice session and clean up sideband resources.
+
+**Body:**
+```json
+{
+  "call_id": "rtc_..."
+}
+```
 
 ### `GET /tools`
 List available Amplifier tools.
@@ -142,7 +170,11 @@ voice-server/
 │   ├── amplifier_bridge.py    # Amplifier integration
 │   ├── config.py               # Configuration
 │   ├── realtime.py             # OpenAI Realtime API client
-│   ├── service.py              # FastAPI app
+│   ├── service.py              # FastAPI app + endpoints
+│   ├── sideband.py             # Server-side sideband WebSocket control plane
+│   ├── tools/                  # Tool definitions
+│   │   ├── __init__.py
+│   │   └── dispatch_tool.py    # Async dispatch tool definition
 │   └── protocols/              # Voice-specific protocols
 │       ├── voice_approval.py
 │       └── voice_display.py

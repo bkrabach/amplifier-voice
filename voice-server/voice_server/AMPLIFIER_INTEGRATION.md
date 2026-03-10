@@ -49,9 +49,11 @@ The voice assistant uses a clean hybrid architecture:
 ### Key Components
 
 1. **OpenAI Realtime API** - Handles voice I/O (Speech-to-Text and Text-to-Speech) via WebRTC
-2. **Amplifier Bridge** - Manages the delegate tool and agent spawning
-3. **Delegate Tool** - Routes work to specialist AI agents running on Anthropic Claude
-4. **Specialist Agents** - explorer, architect, builder, bug-hunter, git-ops, web-research
+2. **Sideband WebSocket** - Server-side control plane that intercepts all tool calls from the OpenAI session
+3. **Amplifier Bridge** - Manages the delegate and dispatch tools and agent spawning
+4. **Delegate Tool** - Synchronous agent delegation (quick tasks, 1-5s)
+5. **Dispatch Tool** - Asynchronous fire-and-forget delegation (heavy tasks, 10s-5min; user can keep talking)
+6. **Specialist Agents** - explorer, architect, builder, bug-hunter, git-ops, web-research
 
 ## Configuration
 
@@ -62,10 +64,13 @@ The voice assistant uses a clean hybrid architecture:
 OPENAI_API_KEY=your_api_key
 
 # Amplifier Configuration (optional)
-AMPLIFIER_BUNDLE=amplifier-dev      # Bundle with delegate tool
+AMPLIFIER_BUNDLE=amplifier-dev      # Bundle with delegate + dispatch tools
 ANTHROPIC_API_KEY=sk-ant-...        # Required for agent delegation
 AMPLIFIER_CWD=/path/to/working    # Working directory for tools (default: current directory)
 AMPLIFIER_AUTO_APPROVE=true       # Auto-approve tools (recommended for voice)
+
+# Context management
+RETENTION_RATIO=0.8               # Auto-truncation ratio (0.0-1.0, default: 0.8)
 ```
 
 ### Settings
@@ -74,7 +79,7 @@ Configuration is managed in `config.py`:
 
 ```python
 class RealtimeSettings:
-    model: str = "gpt-4o-realtime-preview-2024-12-17"
+    model: str = "gpt-realtime-1.5"
     voice: str = "verse"  # alloy, ash, ballad, coral, echo, sage, shimmer, verse
     session_config: dict = {...}
 
@@ -91,24 +96,28 @@ class AmplifierSettings:
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/session` | Create voice session with Amplifier tools |
-| POST | `/sdp` | Exchange SDP for WebRTC connection |
-| POST | `/execute/{tool_name}` | Execute a tool via Amplifier |
+| POST | `/sdp` | Exchange SDP for WebRTC connection (returns `X-Call-Id` header) |
+| POST | `/voice/sideband` | Connect server-side sideband WebSocket to OpenAI session |
+| POST | `/voice/end` | End voice session and cleanup sideband resources |
 | GET | `/tools` | List available tools |
 | GET | `/health` | Health check with Amplifier status |
 
-### Tool Execution
+### Sideband Tool Execution
+
+Tool execution is handled entirely server-side via the sideband WebSocket. The browser
+never sees or executes tool calls. When OpenAI emits a `function_call`, the sideband
+intercepts it, executes the tool via Amplifier, and injects the result back into the session.
 
 ```bash
-# Execute a tool
-curl -X POST http://localhost:8080/execute/read_file \
+# Connect sideband after WebRTC is established
+curl -X POST http://localhost:8080/voice/sideband \
     -H "Content-Type: application/json" \
-    -d '{"path": "/path/to/file.txt"}'
+    -d '{"call_id": "rtc_...", "session_id": "sess_..."}'
 
 # Response
 {
-    "success": true,
-    "output": "file contents...",
-    "error": null
+    "status": "connected",
+    "call_id": "rtc_..."
 }
 ```
 
@@ -136,18 +145,14 @@ The frontend handles these event types:
 
 ```typescript
 enum VoiceChatEventType {
-    // OpenAI Realtime events
+    // OpenAI Realtime events (via data channel)
     SPEECH_STARTED = 'input_audio_buffer.speech_started',
     TRANSCRIPTION_COMPLETED = 'conversation.item.input_audio_transcription.completed',
     ASSISTANT_DELTA = 'response.audio_transcript.delta',
     ASSISTANT_DONE = 'response.audio_transcript.done',
-    FUNCTION_CALL_DONE = 'response.function_call_arguments.done',
 
-    // Amplifier events
-    VOICE_TOOL_START = 'voice_tool_start',
-    VOICE_TOOL_COMPLETE = 'voice_tool_complete',
-    VOICE_TOOL_ERROR = 'voice_tool_error',
-    VOICE_DISPLAY = 'voice_display',
+    // Note: function_call events are handled server-side via sideband.
+    // The client no longer processes tool calls directly.
 }
 ```
 
@@ -196,9 +201,13 @@ voice-server/
 ├── voice_server/
 │   ├── __init__.py
 │   ├── config.py           # Configuration settings
-│   ├── service.py          # FastAPI application
-│   ├── realtime.py         # OpenAI Realtime API
+│   ├── service.py          # FastAPI application + endpoints
+│   ├── realtime.py         # OpenAI Realtime API client
+│   ├── sideband.py         # Server-side sideband WebSocket control plane
 │   ├── amplifier_bridge.py # Amplifier integration
+│   ├── tools/
+│   │   ├── __init__.py
+│   │   └── dispatch_tool.py  # Async dispatch tool definition
 │   ├── bundles/
 │   │   └── voice.yaml      # Voice bundle config
 │   └── protocols/

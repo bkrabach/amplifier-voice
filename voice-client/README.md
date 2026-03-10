@@ -1,6 +1,6 @@
 # Amplifier Voice Client
 
-React-based web client for real-time voice conversations with OpenAI's `gpt-realtime` model and Amplifier tool execution.
+React-based web client for real-time voice conversations with OpenAI's `gpt-realtime-1.5` model. The client is a pure audio transport — all tool execution happens server-side via the sideband WebSocket.
 
 ## Architecture
 
@@ -25,8 +25,8 @@ React-based web client for real-time voice conversations with OpenAI's `gpt-real
 ┌─────────────────────────────────────────────────────────┐
 │  Voice Server (FastAPI)                                 │
 │  - Session creation (ephemeral keys)                    │
-│  - SDP exchange (WebRTC signaling)                      │
-│  - Tool execution via Amplifier                         │
+│  - SDP exchange (WebRTC signaling, returns X-Call-Id)   │
+│  - Sideband WebSocket (all tool execution server-side)  │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -39,16 +39,16 @@ React-based web client for real-time voice conversations with OpenAI's `gpt-real
 - **Streamed audio responses** from assistant
 
 ### OpenAI Realtime API (GA)
-- Uses `gpt-realtime` model (General Availability)
+- Uses `gpt-realtime-1.5` model (General Availability)
 - Ephemeral API keys for secure client connections
 - Full duplex audio streaming
 - Function calling support
 
-### Tool Execution via Amplifier
-- **13+ tools** available (bash, filesystem, web, etc.)
-- **Server-side execution** for security
-- **Real-time status updates** in UI
-- **Automatic retry** on errors
+### Tool Execution via Sideband
+- **All tool calls handled server-side** via sideband WebSocket (browser never sees tool calls)
+- **delegate** tool for synchronous tasks (quick, 1-5s)
+- **dispatch** tool for async fire-and-forget tasks (heavy, 10s-5min — user can keep talking)
+- **Retention ratio truncation** for automatic context management
 
 ### User Interface
 - **Fluent UI** components for professional look
@@ -61,7 +61,7 @@ React-based web client for real-time voice conversations with OpenAI's `gpt-real
 ### 1. Install Dependencies
 
 ```bash
-cd /Users/brkrabac/repos/realtime-voice/amplifier-voice/voice-client
+cd voice-client
 
 # Using npm
 npm install
@@ -110,8 +110,8 @@ voice-client/
 │   │
 │   ├── hooks/                # React hooks
 │   │   ├── useVoiceChat.ts   # Main orchestration
-│   │   ├── useWebRTC.ts      # WebRTC connection
-│   │   └── useChatMessages.ts # Message state & tool execution
+│   │   ├── useWebRTC.ts      # WebRTC connection + sideband init
+│   │   └── useChatMessages.ts # Message state
 │   │
 │   ├── models/               # TypeScript types
 │   │   ├── VoiceChatEvent.ts # Event types
@@ -164,24 +164,19 @@ OpenAI responds
   → User hears response
 ```
 
-### 3. Tool Execution Flow
+### 3. Tool Execution Flow (Server-Side via Sideband)
 
 ```
 OpenAI decides to use a tool
-  → event: response.function_call_arguments.delta
-  → event: response.function_call_arguments.done
+  → Tool call sent via sideband WebSocket to server
+  → Server executes tool via Amplifier
+  → Server injects result back into session via sideband
+  → OpenAI speaks the result
   
-Client executes tool
-  → POST /execute/{tool_name}
-  → Amplifier executes on server
-  → Result returned
-  
-Client sends result back
-  → event: conversation.item.create (function_call_output)
-  → event: response.create (trigger assistant response)
-  
-OpenAI speaks the result
-  → Audio response with tool result
+Note: The browser never sees tool calls. All tool execution
+is handled server-side via the sideband WebSocket control plane.
+The client only needs to call POST /voice/sideband after
+WebRTC connects to enable server-side tool handling.
 ```
 
 ## OpenAI Realtime Events (GA API)
@@ -210,16 +205,17 @@ The General Availability API uses different event names than the beta:
 
 ### Server URL
 
-Change the server URL in both files if needed:
+The server URL is centralized via `VITE_SERVER_URL` environment variable. All hooks
+read from `voiceConfig.serverUrl`.
 
-**src/hooks/useWebRTC.ts:**
-```typescript
-const BASE_URL = 'http://127.0.0.1:8080';
+Create a `.env` file in `voice-client/`:
+```bash
+VITE_SERVER_URL=http://localhost:8080
 ```
 
-**src/hooks/useChatMessages.ts:**
-```typescript
-const BASE_URL = 'http://127.0.0.1:8080';
+Or for HTTPS (e.g., accessing from another machine):
+```bash
+VITE_SERVER_URL=https://your-host:8081
 ```
 
 ### WebRTC Settings
@@ -316,8 +312,8 @@ Grant microphone permissions in browser settings.
 ### Tool execution fails
 
 1. Check server logs for Amplifier errors
-2. Verify Amplifier bundle is loaded (check server startup)
-3. Test tool execution directly: `curl -X POST http://localhost:8080/execute/bash -d '{"arguments":{"command":"echo test"}}'`
+2. Verify sideband connected: look for `[WebRTC] Sideband connected for call_id:` in browser console
+3. Verify Amplifier bundle is loaded (check server startup logs)
 
 ## Development Tips
 
