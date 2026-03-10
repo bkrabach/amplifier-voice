@@ -22,6 +22,11 @@ logger = logging.getLogger(__name__)
 OPENAI_REALTIME_WS = "wss://api.openai.com/v1/realtime"
 TOOL_CALL_EVENT = "response.function_call_arguments.done"
 
+# ---------------------------------------------------------------------------
+# Module-level lock — serialises delegate / dispatch calls sharing one session
+# ---------------------------------------------------------------------------
+execution_lock = asyncio.Lock()
+
 
 class VoiceSideband:
     """Server-side WebSocket that shadows an OpenAI Realtime session."""
@@ -192,3 +197,50 @@ class VoiceSideband:
 
         self.is_connected = False
         logger.info("Sideband disconnected")
+
+
+# ---------------------------------------------------------------------------
+# Background job runner
+# ---------------------------------------------------------------------------
+
+
+async def run_agent_job(
+    sideband: VoiceSideband,
+    call_id: str,
+    agent: str,
+    instruction: str,
+    bridge: Any,
+) -> None:
+    """Run a delegate call in the background and inject the result into the session.
+
+    Acquires ``execution_lock`` for the duration of the ``bridge.execute_tool``
+    call so that concurrent delegate / dispatch invocations sharing the same
+    Amplifier session are serialised.
+
+    On success the tool output is injected via :meth:`VoiceSideband.inject_result`.
+    On any exception a human-readable error string is injected instead — the
+    function itself never re-raises.
+    """
+    try:
+        async with execution_lock:
+            result = await bridge.execute_tool(
+                "delegate", {"agent": agent, "instruction": instruction}
+            )
+
+        if hasattr(result, "to_dict"):
+            output = json.dumps(result.to_dict())
+        else:
+            output = json.dumps(result)
+
+        await sideband.inject_result(
+            call_id=call_id,
+            output=output,
+            instructions="The background agent task has completed. Summarize the result to the user.",
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.exception("run_agent_job failed for call_id=%s", call_id)
+        await sideband.inject_result(
+            call_id=call_id,
+            output=f"Background task failed: {e}",
+            instructions="A background task encountered an error. Inform the user.",
+        )
