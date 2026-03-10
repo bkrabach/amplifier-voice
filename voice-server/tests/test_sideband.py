@@ -215,7 +215,9 @@ class TestVoiceSidebandSendSessionUpdate:
         assert len(fake_ws.sent) == 1
         msg = json.loads(fake_ws.sent[0])
         assert msg["type"] == "session.update"
-        assert msg["session"] == session_config
+        # GA API requires "type": "realtime" injected into every session.update
+        expected = {"type": "realtime", **session_config}
+        assert msg["session"] == expected
 
 
 class TestVoiceSidebandDispatchRouting:
