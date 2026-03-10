@@ -41,7 +41,7 @@ class RealtimeSettings(BaseSettings):
 
     # Use GA model with prompt caching (90% cost savings on system/tools)
     # Options: "gpt-realtime" (latest) or "gpt-realtime-2025-08-28" (pinned)
-    model: str = "gpt-realtime"
+    model: str = "gpt-realtime-1.5"
 
     # Available voices: alloy, ash, ballad, coral, echo, sage, shimmer, verse
     # New GA voices: cedar, marin (exclusive to Realtime API)
